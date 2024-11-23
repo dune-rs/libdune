@@ -3,7 +3,7 @@
  */
 
 #define __ASSEMBLY__
-#include "../kern/dune.h"
+#include dune.h"
 
 #define USE_RDWRGSFS 0
 

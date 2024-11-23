@@ -1,3 +1,4 @@
+#![feature(thread_local)]
 #[macro_use]
 pub mod globals;
 pub mod dune;

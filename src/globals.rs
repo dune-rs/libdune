@@ -1,7 +1,8 @@
 use std::arch::asm;
 use libc::c_void;
+use x86_64::structures::paging::PageTableEntry;
 
-pub const NPTBITS: usize = 9; // log2(NPTENTRIES)
+pub const NPTBITS: i32 = 9; // log2(NPageTableEntryRIES)
 pub const NPTLVLS: usize = 3; // page table depth -1
 pub const PD_SKIP: usize = 6; // Offset of pd_lim in Pseudodesc
 
@@ -10,18 +11,7 @@ pub const PD_SKIP: usize = 6; // Offset of pd_lim in Pseudodesc
 pub const CR3_NOFLUSH: u64 = 1 << 63;
 
 // ---------------------------------------------------------------------
-/*
- * We use the same general GDT layout as Linux so that can we use
- * the same syscall MSR values. In practice only code segments
- * matter, since ia-32e mode ignores most of segment values anyway,
- * but just to be extra careful we match data as well.
- */
-pub const GD_KT: usize = 0x10;
-pub const GD_KD: usize = 0x18;
-pub const GD_UD: usize = 0x28;
-pub const GD_UT: usize = 0x30;
-// pub const GD_TSS: usize = 0x38;
-// pub const GD_TSS2: usize = 0x40;
+
 pub const NR_GDT_ENTRIES: usize = 9;
 
 pub const IDTD_P: u8 = 1 << 7;
@@ -32,7 +22,7 @@ pub const IDTD_INTERRUPT_GATE: u8 = 0xE;
 pub const IDT_ENTRIES: usize = 256;
 
 // pub const PGSIZE: usize = 4096;
-pub const PAGEBASE: usize = 0x200000000;
+// pub const PAGEBASE: usize = 0x200000000;
 // pub const MAX_PAGES: usize = 1 << 20;
 /*
  *
@@ -60,7 +50,7 @@ macro_rules! PDX {
     };
 }
 
-pub const NPTENTRIES: usize = 1 << NPTBITS;
+pub const NPAGE_TABLE_ENTRY_RIES: usize = 1 << NPTBITS;
 
 /* page number field of address */
 #[allow(unused_macros)]
@@ -72,8 +62,8 @@ macro_rules! PPN {
 
 /* page size */
 pub const PGSHIFT: usize = 12; /* log2(PGSIZE) */
-pub const PGSIZE: usize = 1 << PGSHIFT; /* bytes mapped by a page */
-pub const PGMASK: usize = PGSIZE - 1;
+pub const PGSIZE: u64 = 1 << PGSHIFT; /* bytes mapped by a page */
+pub const PGMASK: u64 = PGSIZE - 1;
 
 /* offset in page */
 #[allow(unused_macros)]
@@ -132,14 +122,11 @@ pub const PTE_USR1: u64 = 0x4000000000000000; /* Reserved for user software */
 pub const PTE_USR2: u64 = 0x2000000000000000; /* Reserved for user software */
 pub const PTE_USR3: u64 = 0x1000000000000000; /* Reserved for user software */
 
-// typedef uint64_t PteEntry;
-pub type PteEntry = u64;
-
 /* address in page table entry */
 #[allow(unused_macros)]
 macro_rules! PTE_ADDR {
     ($pte:expr) => {
-        ($pte & 0xffffffffff000) as usize
+        ($pte & 0xffffffffff000) as u64
     };
 }
 
@@ -369,12 +356,21 @@ macro_rules! SETGATE {
     };
 }
 
+/*
+ * We use the same general GDT layout as Linux so that can we use
+ * the same syscall MSR values. In practice only code segments
+ * matter, since ia-32e mode ignores most of segment values anyway,
+ * but just to be extra careful we match data as well.
+ */
+pub const GD_KT: u16 = 0x10;
+pub const GD_KD: u16 = 0x18;
+pub const GD_UD: u16 = 0x28;
+pub const GD_UT: u16 = 0x30;
+pub const GD_TSS: u16 = 0x38;
+pub const GD_TSS2: u16 = 0x40;
 
-pub const GD_TSS: usize = 0x38;
-pub const GD_TSS2: usize = 0x40;
-
-pub const ARCH_GET_FS: u64 = 0x1003;
-pub const ARCH_SET_FS: u64 = 0x1004;
+pub const ARCH_GET_FS: i32 = 0x1003;
+pub const ARCH_SET_FS: i32 = 0x1004;
 
 // pub const SEG_X: u64 = 0x8;
 // pub const SEG_R: u64 = 0x2;
@@ -486,23 +482,3 @@ pub fn rdmsrl(msr: u32) -> u64 {
     }
     ((high as u64) << 32) | (low as u64)
 }
-
-/*
- * IOCTL interface
- */
-
-/* FIXME: this must be reserved in miscdevice.h */
-pub const DUNE_MINOR: u32 = 233;
-
-pub const DUNE_ENTER: u32 = 0x8004_E901;
-pub const DUNE_GET_SYSCALL: u32 = 0x2000_E902;
-pub const DUNE_GET_LAYOUT: u32 = 0x4004_E903;
-pub const DUNE_TRAP_ENABLE: u32 = 0x8004_E904;
-pub const DUNE_TRAP_DISABLE: u32 = 0x2000_E905;
-
-pub const DUNE_RET_EXIT: u32 = 1;
-pub const DUNE_RET_EPT_VIOLATION: u32 = 2;
-pub const DUNE_RET_INTERRUPT: u32 = 3;
-pub const DUNE_RET_SIGNAL: u32 = 4;
-pub const DUNE_RET_UNHANDLED_VMEXIT: u32 = 5;
-pub const DUNE_RET_NOENTER: u32 = 6;

@@ -1,37 +1,15 @@
 // #[macro_use]
-use std::os::raw::{c_void};
+use std::os::raw::c_void;
 use std::mem;
-use libc::{ioctl};
+use libc::ioctl;
+use dune_sys::*;
 
-use crate::globals::{X86_EFLAGS_TF};
-use crate::dune::{DuneConfig, DuneTrapRegs, dune_fd, __dune_go_dune, __dune_go_linux};
-use crate::funcs;
-const DUNE_TRAP_ENABLE: u64 = 0x4008_0000;
-const DUNE_TRAP_DISABLE: u64 = 0x4008_0001;
-
-#[repr(C)]
-#[derive(Debug, Default)]
-struct DuneTrapConfig {
-    trigger_rip: u64,
-    delay: u8,
-    notify_func: extern "C" fn(*mut DuneTrapRegs, *mut c_void),
-    regs: *mut DuneTrapRegs,
-    regs_size: usize,
-    priv_data: *mut c_void,
-}
-
-impl DuneTrapConfig {
-    funcs!(trigger_rip, u64);
-    funcs!(delay, u8);
-    funcs!(notify_func, extern "C" fn(*mut DuneTrapRegs, *mut c_void));
-    funcs!(regs, *mut DuneTrapRegs);
-    funcs!(regs_size, usize);
-    funcs!(priv_data, *mut c_void);
-}
+use crate::globals::*;
+use crate::dune::*;
 
 static mut TRAP_REGS: DuneTrapRegs = DuneTrapRegs::default();
 
-fn dune_trap_enable(trigger_rip: u64, delay: u8, func: fn(*mut DuneTrapRegs, *mut c_void), priv_data: *mut c_void) {
+unsafe extern "C" fn dune_trap_enable(trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void) {
     let trap_conf = DuneTrapConfig::default();
     trap_conf.set_trigger_rip(trigger_rip)
             .set_delay(delay)
@@ -40,11 +18,11 @@ fn dune_trap_enable(trigger_rip: u64, delay: u8, func: fn(*mut DuneTrapRegs, *mu
             .set_regs_size(mem::size_of::<DuneTrapRegs>())
             .set_priv_data(priv_data);
 
-    { ioctl(dune_fd, DUNE_TRAP_ENABLE, &trap_conf); }
+    { ioctl(DUNE_FD, DUNE_TRAP_ENABLE, &trap_conf); }
 }
 
 fn dune_trap_disable() {
-    unsafe { ioctl(dune_fd, DUNE_TRAP_DISABLE); }
+    unsafe { ioctl(DUNE_FD, DUNE_TRAP_DISABLE); }
 }
 
 fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) -> ! {
@@ -63,7 +41,7 @@ fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) -> ! {
         dune_conf.set_rflags(dune_conf.rflags() | (*regs).rflags() & X86_EFLAGS_TF);
 
         // Continue in Dune mode.
-        __dune_go_dune(dune_fd, dune_conf);
+        __dune_go_dune(DUNE_FD, dune_conf);
         // It doesn't return.
     }
 }

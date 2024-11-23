@@ -33,6 +33,7 @@ unsafe fn dune_puts(buf: *const c_char) -> i64 {
     ret
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn dune_printf(fmt: &str, args: ...) -> i64 {
     let cstr = CString::new(fmt).unwrap();
     let ret = dune_puts(cstr.as_ptr());
@@ -65,7 +66,6 @@ pub unsafe fn dune_mmap(
         in(reg) fd,
         in(reg) offset,
         out(reg) ret_addr,
-        out("rax") _, out("rdi") _, out("rsi") _, out("rdx") _,
     );
     ret_addr
 }
@@ -79,6 +79,7 @@ pub unsafe fn dune_die() {
 }
 
 pub unsafe fn dune_passthrough_syscall(tf: &mut DuneTf) {
+    let mut rax = tf.rax();
     asm!(
         "movq {0}, %rdi",
         "movq {1}, %rsi",
@@ -88,22 +89,23 @@ pub unsafe fn dune_passthrough_syscall(tf: &mut DuneTf) {
         "movq {5}, %r9",
         "vmcall",
         "movq %rax, {6}",
-        in(reg) tf.rdi,
-        in(reg) tf.rsi,
-        in(reg) tf.rdx,
-        in(reg) tf.rcx,
-        in(reg) tf.r8,
-        in(reg) tf.r9,
-        out("rax") tf.rax,
-        out("rdi") _, out("rsi") _, out("rdx") _, out("r10") _, out("r8") _, out("r9") _,
+        in(reg) tf.rdi(),
+        in(reg) tf.rsi(),
+        in(reg) tf.rdx(),
+        in(reg) tf.rcx(),
+        in(reg) tf.r8(),
+        in(reg) tf.r9(),
+        out(reg) rax,
     );
+    tf.set_rax(rax);
 }
 
 pub unsafe fn dune_signal(sig: c_int, cb: SigHandler) -> SigHandler {
     let x = cb as DuneIntrCb; // XXX
-    if signal(sig, cb) == SIG_ERR {
+    let old_handler = signal(sig, cb);
+    if old_handler == SIG_ERR {
         return SIG_ERR;
     }
-    dune_register_intr_handler(DUNE_SIGNAL_INTR_BASE + sig, x);
-    ptr::null_mut()
+    dune_register_intr_handler(DUNE_SIGNAL_INTR_BASE + sig as usize, x);
+    old_handler
 }

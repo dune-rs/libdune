@@ -3,10 +3,13 @@ use std::mem;
 // use std::slice;
 // use std::os::unix::io::AsRawFd;
 use libc::{mmap, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_HUGETLB, PROT_READ, PROT_WRITE};
+use x86_64::PhysAddr;
 // use crate::globals::*;
+use crate::globals::PAGEBASE;
 use crate::globals::*;
 use crate::funcs;
-// const PAGEBASE: usize = 0x200000000;
+
+pub const PAGEBASE: PhysAddr = PhysAddr::new(0x200000000);
 // const PGSIZE: usize = 4096;
 pub const GROW_SIZE: usize = 512;
 pub const MAX_PAGES: usize = 1 << 20;
@@ -59,9 +62,9 @@ impl PageList {
     }
 }
 
-pub static mut pages: *mut Page = ptr::null_mut();
-pub static mut num_pages: usize = 0;
-pub static mut pages_free: PageList = PageList::new();
+pub static mut PAGES: *mut Page = ptr::null_mut();
+pub static mut NUM_PAGES: usize = 0;
+pub static mut PAGES_FREE: PageList = PageList::new();
 
 fn do_mapping(base: *mut libc::c_void, len: usize) -> Result<*mut libc::c_void, i32> {
     let mem = unsafe {
@@ -80,43 +83,28 @@ fn do_mapping(base: *mut libc::c_void, len: usize) -> Result<*mut libc::c_void, 
 
 fn grow_size() -> Result<(), i32> {
     unsafe {
-        let new_num_pages = num_pages + GROW_SIZE;
-        let base = (PAGEBASE + num_pages * PGSIZE) as *mut libc::c_void;
+        let new_num_pages = NUM_PAGES + GROW_SIZE;
+        let base = (PAGEBASE.as_u64() + NUM_PAGES * PGSIZE) as *mut libc::c_void;
         do_mapping(base, GROW_SIZE * PGSIZE)?;
 
-        for i in num_pages..new_num_pages {
-            let page = (PAGEBASE + i * PGSIZE) as *mut Page;
+        for i in NUM_PAGES..new_num_pages {
+            let page = (PAGEBASE.as_u64() + i * PGSIZE) as *mut Page;
             ptr::write(page, Page::new());
-            pages_free.push_front(Box::from_raw(page));
+            PAGES_FREE.push_front(Box::from_raw(page));
         }
 
-        num_pages = new_num_pages;
+        NUM_PAGES = new_num_pages;
     }
     Ok(())
 }
 
-pub fn dune_page_put(page: *mut Page) {
-    unsafe {
-        (*page).ref_count += 1;
-    }
-}
-
-pub fn dune_page_get(page: *mut Page) {
-    unsafe {
-        (*page).ref_count -= 1;
-        if (*page).ref_count == 0 {
-            dune_page_free(page);
-        }
-    }
-}
-
 pub fn dune_page_alloc() -> Result<*mut Page, i32> {
     unsafe {
-        if pages_free.is_empty() {
+        if PAGES_FREE.is_empty() {
             grow_size()?;
         }
 
-        let mut page = pages_free.pop_front().unwrap();
+        let mut page = PAGES_FREE.pop_front().unwrap();
         (*page).ref_count = 1;
         Ok(Box::into_raw(page))
     }
@@ -125,13 +113,13 @@ pub fn dune_page_alloc() -> Result<*mut Page, i32> {
 pub fn dune_page_free(page: *mut Page) {
     unsafe {
         (*page).ref_count = 0;
-        pages_free.push_front(Box::from_raw(page));
+        PAGES_FREE.push_front(Box::from_raw(page));
     }
 }
 
 pub fn dune_page_stats() {
     unsafe {
-        let num_alloc = num_pages - pages_free.head.as_ref().map_or(0, |head| {
+        let num_alloc = NUM_PAGES - PAGES_FREE.head.as_ref().map_or(0, |head| {
             let mut count = 0;
             let mut current = Some(head);
             while let Some(node) = current {
@@ -140,31 +128,67 @@ pub fn dune_page_stats() {
             }
             count
         });
-        println!("DUNE Page Allocator: Alloc {}, Free {}, Total {}", num_alloc, num_pages - num_alloc, num_pages);
+        println!("DUNE Page Allocator: Alloc {}, Free {}, Total {}", num_alloc, NUM_PAGES - num_alloc, NUM_PAGES);
     }
 }
 
-pub fn dune_page_isfrompool(pa: usize) -> bool {
-    pa >= PAGEBASE && pa < PAGEBASE + unsafe { num_pages } * PGSIZE
+pub fn dune_pa2page(pa: PhysAddr) -> *mut Page {
+    unsafe {
+        PAGES.add((pa - PAGEBASE.as_u64()) / PGSIZE)
+    }
+}
+
+pub fn dune_page2pa(pg: *mut Page) -> usize {
+    unsafe {
+        PAGEBASE + (pg.offset_from(PAGES) as usize * PGSIZE)
+    }
+}
+
+pub fn dune_page_isfrompool(pa: PhysAddr) -> bool {
+    pa >= PAGEBASE && pa < PAGEBASE + unsafe { NUM_PAGES } * PGSIZE
+}
+
+pub fn dune_page_get(pg: *mut Page) -> *mut Page {
+    unsafe {
+        assert!(pg >= PAGES);
+        assert!(pg < PAGES.add(NUM_PAGES));
+
+        (*pg).ref_count += 1;
+
+        pg
+    }
+}
+
+pub fn dune_page_put(pg: *mut Page) {
+    unsafe {
+        assert!(pg >= PAGES);
+        assert!(pg < PAGES.add(NUM_PAGES));
+
+        (*pg).ref_count -= 1;
+
+        if (*pg).ref_count == 0 {
+            dune_page_free(pg);
+        }
+    }
 }
 
 pub fn dune_page_init() -> Result<(), i32> {
     unsafe {
-        let base = PAGEBASE as *mut libc::c_void;
-        do_mapping(base, GROW_SIZE * PGSIZE)?;
+        let base = PAGEBASE.as_u64() as *mut libc::c_void;
+        do_mapping(base, GROW_SIZE * PGSIZE as usize)?;
 
-        pages = libc::malloc(mem::size_of::<Page>() * MAX_PAGES) as *mut Page;
-        if pages.is_null() {
+        PAGES = libc::malloc(mem::size_of::<Page>() * MAX_PAGES) as *mut Page;
+        if PAGES.is_null() {
             return Err(-libc::ENOMEM);
         }
 
         for i in 0..GROW_SIZE {
-            let page = (PAGEBASE + i * PGSIZE) as *mut Page;
+            let page = (PAGEBASE.as_u64() + i * PGSIZE) as *mut Page;
             ptr::write(page, Page::new());
-            pages_free.push_front(Box::from_raw(page));
+            PAGES_FREE.push_front(Box::from_raw(page));
         }
 
-        num_pages = GROW_SIZE;
+        NUM_PAGES = GROW_SIZE;
     }
     Ok(())
 }

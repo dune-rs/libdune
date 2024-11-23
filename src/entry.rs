@@ -1,13 +1,21 @@
 use std::io::{self, ErrorKind};
 use std::mem;
+use std::ops::{BitAnd, Sub, SubAssign};
 use std::ptr;
 use std::arch::asm;
 use std::sync::atomic::{AtomicBool, Ordering};
+use dune_sys::funcs;
 use libc::{c_void, mmap, munmap, open, O_RDWR, PROT_READ, PROT_WRITE, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, sigaction, SIG_IGN, SIGTSTP, SIGSTOP, SIGKILL, SIGCHLD, SIGINT, SIGTERM};
+use x86_64::structures::paging::PageTableFlags;
 use std::mem::offset_of;
 use libc::ioctl;
-// use PROT_EXEC, MAP_ANON, DUNE_GET_SYSCALL
 use libc::{PROT_EXEC, MAP_ANON};
+use x86_64::structures::gdt::{GlobalDescriptorTable, Descriptor};
+use x86_64::structures::paging::page_table::PageTableEntry;
+use x86_64::{PhysAddr,VirtAddr};
+use x86_64::registers::model_specific::{FsBase, GsBase};
+use dune_sys::dune::{DuneConfig, DuneRetCode,DuneLayout};
+use dune_sys::dev::{DuneDevice,DUNE_ENTER,DUNE_GET_SYSCALL,DUNE_GET_LAYOUT,DUNE_TRAP_ENABLE,DUNE_TRAP_DISABLE};
 
 use crate::globals::*;
 use crate::page::*;
@@ -16,9 +24,8 @@ use crate::dune::*;
 use crate::debug::*;
 use crate::util::*;
 use crate::vm::*;
-// use crate::{phys_limit,mmap_base,stack_base};
 
-// static mut pgroot: *mut PteEntry = ptr::null_mut();
+// static mut pgroot: *mut PageTableEntry = ptr::null_mut();
 // pub static mut phys_limit: UintptrT = 0;
 // pub static mut mmap_base: UintptrT = 0;
 // pub static mut stack_base: UintptrT = 0;
@@ -35,7 +42,7 @@ struct IdtDescriptor {
     zero: u32,
 }
 
-static mut idt: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
+static mut IDT: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
 
 static GDT_TEMPLATE: [u64; NR_GDT_ENTRIES] = [
     0,
@@ -60,8 +67,18 @@ struct DunePercpu {
     gdt: [u64; NR_GDT_ENTRIES],
 }
 
+impl DunePercpu {
+    funcs!(percpu_ptr, u64);
+    funcs!(tmp, u64);
+    funcs!(kfs_base, u64);
+    funcs!(ufs_base, u64);
+    funcs!(in_usermode, u64);
+}
+
+use std::cell::RefCell;
+
 thread_local! {
-    static lpercpu: std::cell::RefCell<Option<DunePercpu>> = std::cell::RefCell::new(None);
+    static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
 pub fn dune_get_user_fs() -> u64 {
@@ -88,36 +105,27 @@ pub fn dune_set_user_fs(fs_base: u64) {
     }
 }
 
-fn map_ptr(p: *mut c_void, len: usize) {
-    let page = p as usize & !(PGSIZE - 1);
-    let page_end = (p as usize + len + PGSIZE - 1) & !(PGSIZE - 1);
-    let l = page_end - page;
-    let pg = page as *mut c_void;
+unsafe fn map_ptr(p: *mut c_void, len: usize) {
+    // Align the pointer to the page size
+    let page = (p as usize & !(PGSIZE - 1)) as *mut c_void;
+    let page_end = p.add(len + PGSIZE - 1).mask(!(PGSIZE - 1));
+    let len = page_end.sub(page);
+    let ptr = page as *mut c_void;
+    let pa = dune_va_to_pa(ptr) as *mut c_void;
 
-    unsafe {
-        dune_vm_map_phys(pgroot, pg, l, dune_va_to_pa(pg) as *mut c_void, PERM_R | PERM_W);
-    }
+    dune_vm_map_phys(PGROOT, pg, len, pa, PERM_R | PERM_W);
 }
 
-fn setup_safe_stack(percpu: &mut DunePercpu) -> io::Result<()> {
-    let safe_stack = unsafe {
-        mmap(
-            ptr::null_mut(),
-            PGSIZE,
-            PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS,
-            -1,
-            0,
-        )
-    };
-
+unsafe fn setup_safe_stack(percpu: &mut DunePercpu) -> io::Result<()> {
+    let safe_stack = mmap(ptr::null_mut(), PGSIZE, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if safe_stack == MAP_FAILED {
         return Err(io::Error::new(ErrorKind::Other, "Failed to allocate safe stack"));
     }
 
     map_ptr(safe_stack, PGSIZE);
 
-    let safe_stack = unsafe { safe_stack.add(PGSIZE) };
+    let safe_stack = safe_stack.add(PGSIZE);
     percpu.tss.tss_iomb = offset_of!(Tss, tss_iopb) as u16;
 
     for i in 1..8 {
@@ -141,12 +149,13 @@ struct Tptr {
     limit: u16,
     base: u64,
 }
- 
+
  /**
   * dune_boot - Brings the user-level OS online
   * @percpu: the thread-local data
   */
-fn dune_boot(percpu: &mut DunePercpu) -> io::Result<()> {
+unsafe fn dune_boot(_percpu: *mut DunePercpu) {
+    let percpu = &mut *_percpu;
     setup_gdt(percpu);
 
     let gdtr = Tptr {
@@ -155,49 +164,43 @@ fn dune_boot(percpu: &mut DunePercpu) -> io::Result<()> {
     };
 
     let idtr = Tptr {
-        base: idt.as_ptr() as u64,
-        limit: (idt.len() * mem::size_of::<IdtDescriptor>() - 1) as u16,
+        base: IDT.as_ptr() as u64,
+        limit: (IDT.len() * mem::size_of::<IdtDescriptor>() - 1) as u16,
     };
 
-    unsafe {
-        asm!(
-            // STEP 1: load the new GDT
-            "lgdt [{0}]",
-            // STEP 2: initialize data segments
-            "mov {1:x}, %ax",
-            "mov %ax, %ds",
-            "mov %ax, %es",
-            "mov %ax, %ss",
-            // STEP 3: long jump into the new code segment
-            "mov {2:x}, %rax",
-            "pushq %rax",
-            "pushq $1f",
-            "lretq",
-            "1:",
-            "nop",
-            // STEP 4: load the task register (for safe stack switching)
-            "mov {3:x}, %ax",
-            "ltr %ax",
-            // STEP 5: load the new IDT and enable interrupts
-            "lidt [{4}]",
-            "sti",
-            in(reg) &gdtr,
-            in(reg) GD_KD,
-            in(reg) GD_KT,
-            in(reg) GD_TSS,
-            in(reg) &idtr
-        );
-    }
+    asm!(
+        // STEP 1: load the new GDT
+        "lgdt [{0}]",
+        // STEP 2: initialize data segments
+        "mov {1:x}, %ax",
+        "mov %ax, %ds",
+        "mov %ax, %es",
+        "mov %ax, %ss",
+        // STEP 3: long jump into the new code segment
+        "mov {2:x}, %rax",
+        "pushq %rax",
+        "pushq $1f",
+        "lretq",
+        "1:",
+        "nop",
+        // STEP 4: load the task register (for safe stack switching)
+        "mov {3:x}, %ax",
+        "ltr %ax",
+        // STEP 5: load the new IDT and enable interrupts
+        "lidt [{4}]",
+        "sti",
+        in(reg) &gdtr,
+        in(reg) GD_KD,
+        in(reg) GD_KT,
+        in(reg) GD_TSS,
+        in(reg) &idtr
+    );
 
     // STEP 6: FS and GS require special initialization on 64-bit
-    unsafe {
-        wrmsrl(MSR_FS_BASE, percpu.kfs_base);
-        wrmsrl(MSR_GS_BASE, percpu as *const _ as u64);
-    }
-
-    Ok(())
+    FsBase::write!(VirtAddr::new(percpu.kfs_base));
+    GsBase::write!(VirtAddr::new(percpu as *const _ as u64));
 }
- 
+
 const ISR_LEN: usize = 16;
 
 fn set_idt_addr(id: &mut IdtDescriptor, addr: u64) {
@@ -206,13 +209,13 @@ fn set_idt_addr(id: &mut IdtDescriptor, addr: u64) {
     id.high = ((addr >> 32) & 0xFFFFFFFF) as u32;
 }
 
-fn setup_idt() {
+unsafe fn setup_idt() {
     for i in 0..IDT_ENTRIES {
-        let id = &mut idt[i];
+        let id = &mut IDT[i];
         let mut isr = __dune_intr as usize;
 
         isr += ISR_LEN * i;
-        unsafe { ptr::write_bytes(id as *mut IdtDescriptor, 0, 1) };
+        ptr::write_bytes(id as *mut IdtDescriptor, 0, 1);
 
         id.selector = GD_KT;
         id.type_attr = IDTD_P | IDTD_TRAP_GATE;
@@ -220,6 +223,7 @@ fn setup_idt() {
         match i {
             T_BRKPT => {
                 id.type_attr |= IDTD_CPL3;
+                id.ist = 1;
                 // fallthrough
             }
             T_DBLFLT | T_NMI | T_MCHK => {
@@ -232,29 +236,26 @@ fn setup_idt() {
     }
 }
 
-fn setup_syscall() -> io::Result<()> {
-    let lstar = unsafe { ioctl(dune_fd, DUNE_GET_SYSCALL) };
+unsafe fn setup_syscall() -> io::Result<()> {
+    let lstar = ioctl(DUNE_FD, DUNE_GET_SYSCALL);
     if lstar == -1 {
         return Err(io::Error::last_os_error());
     }
 
-    let page = unsafe {
-        mmap(
-            ptr::null_mut(),
-            PGSIZE * 2,
-            PROT_READ | PROT_WRITE | PROT_EXEC,
-            MAP_PRIVATE | MAP_ANON,
-            -1,
-            0,
-        )
-    };
+    let page = mmap(ptr::null_mut(),
+                                (PGSIZE * 2) as usize,
+                                PROT_READ | PROT_WRITE | PROT_EXEC,
+                                MAP_PRIVATE | MAP_ANON,
+                                -1,
+                                0);
 
     if page == MAP_FAILED {
         return Err(io::Error::last_os_error());
     }
 
-    let lstara = lstar & !(PGSIZE as u64 - 1);
-    let off = lstar - lstara;
+    // calculate the page-aligned address
+    let lstara = lstar.bitand(!(PGSIZE - 1));
+    let off = lstar.bitand(PGSIZE - 1);
 
     unsafe {
         ptr::copy_nonoverlapping(
@@ -266,9 +267,10 @@ fn setup_syscall() -> io::Result<()> {
 
     for i in (0..=PGSIZE).step_by(PGSIZE) {
         let pa = dune_mmap_addr_to_pa(unsafe { page.add(i) });
-        let mut pte: *mut PteEntry = ptr::null_mut();
+        let mut pte: *mut PageTableEntry = ptr::null_mut();
         unsafe {
-            dune_vm_lookup(pgroot, (lstara + i as u64) as *mut c_void, 1, &mut pte);
+            let start = (lstara + i as u64) as *mut c_void;
+            dune_vm_lookup(PGROOT, start, CreateType::Normal, &mut pte);
             *pte = PTE_ADDR!(pa) | PTE_P;
         }
     }
@@ -277,12 +279,17 @@ fn setup_syscall() -> io::Result<()> {
 }
 
 const VSYSCALL_ADDR: u64 = 0xffffffffff600000;
- 
+
 fn setup_vsyscall() {
-    let mut pte: *mut PteEntry = ptr::null_mut();
+    let mut ptep: *mut PageTableEntry = ptr::null_mut();
     unsafe {
-        dune_vm_lookup(pgroot, VSYSCALL_ADDR as *mut c_void, 1, &mut pte);
-        *pte = PTE_ADDR!(dune_va_to_pa(&__dune_vsyscall_page as *const _ as *mut c_void)) | PTE_P | PTE_U;
+        let vsyscall_addr = VSYSCALL_ADDR as *mut c_void;
+        let vsyscall_page = &__dune_vsyscall_page as *const _ as *mut c_void;
+        let page = dune_va_to_pa(vsyscall_page);
+        let addr = PhysAddr::new(page as u64);
+        dune_vm_lookup(PGROOT, vsyscall_addr, CreateType::Normal, &mut ptep);
+        let pte = &mut *ptep;
+        pte.set_addr(addr, PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE);
     }
 }
 
@@ -290,7 +297,7 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
     let mut perm = PERM_NONE;
 
     // page region already mapped
-    if ent.begin == PAGEBASE as u64 {
+    if ent.begin == PAGEBASE.as_u64() {
         return;
     }
 
@@ -301,11 +308,12 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
 
     if ent.type_ == ProcMapType::Vdso {
         unsafe {
+            let pa = dune_va_to_pa(ent.begin as *mut c_void);
             dune_vm_map_phys(
-                pgroot,
+                PGROOT,
                 ent.begin as *mut c_void,
-                (ent.end - ent.begin) as usize,
-                dune_va_to_pa(ent.begin as *mut c_void),
+                ent.len(),
+                pa as *mut c_void,
                 PERM_U | PERM_R | PERM_X,
             );
         }
@@ -314,11 +322,12 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
 
     if ent.type_ == ProcMapType::Vvar {
         unsafe {
+            let pa = dune_va_to_pa(ent.begin as *mut c_void);
             dune_vm_map_phys(
-                pgroot,
+                PGROOT,
                 ent.begin as *mut c_void,
-                (ent.end - ent.begin) as usize,
-                dune_va_to_pa(ent.begin as *mut c_void),
+                ent.len(),
+                pa as *mut c_void,
                 PERM_U | PERM_R,
             );
         }
@@ -336,11 +345,12 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
     }
 
     let ret = unsafe {
+        let pa_start = dune_va_to_pa(ent.begin as *mut c_void);
         dune_vm_map_phys(
-            pgroot,
+            PGROOT,
             ent.begin as *mut c_void,
-            (ent.end - ent.begin) as usize,
-            dune_va_to_pa(ent.begin as *mut c_void),
+            ent.len(),
+            pa_start as *mut c_void,
             perm,
         )
     };
@@ -349,13 +359,10 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
 
 fn __setup_mappings_precise() -> io::Result<()> {
     let ret = unsafe {
-        dune_vm_map_phys(
-            pgroot,
-            PAGEBASE as *mut c_void,
-            MAX_PAGES * PGSIZE,
-            dune_va_to_pa(PAGEBASE as *mut c_void),
-            PERM_R | PERM_W | PERM_BIG,
-        )
+        let va_start = PAGEBASE.as_u64() as *mut c_void;
+        let len = MAX_PAGES as u64 * PGSIZE;
+        let pa_start = dune_va_to_pa(PAGEBASE.as_u64() as *mut c_void) as *mut c_void;
+        dune_vm_map_phys(PGROOT, va_start, len, pa_start, PERM_R | PERM_W | PERM_BIG)
     };
     if ret != 0 {
         return Err(io::Error::from_raw_os_error(ret));
@@ -367,41 +374,50 @@ fn __setup_mappings_precise() -> io::Result<()> {
 }
 
 fn setup_vdso_cb(ent: &DuneProcmapEntry) {
-    if ent.type_ == ProcMapType::Vdso {
-        unsafe {
-            dune_vm_map_phys(
-                pgroot,
-                ent.begin as *mut c_void,
-                (ent.end - ent.begin) as usize,
-                dune_va_to_pa(ent.begin as *mut c_void),
-                PERM_U | PERM_R | PERM_X,
-            );
-        }
-        return;
-    }
+    let pa = unsafe { dune_va_to_pa(ent.begin as *mut c_void) };
+    let perm = match ent.type_ {
+        ProcMapType::Vdso => Ok(PERM_U | PERM_R | PERM_X),
+        ProcMapType::Vvar => Ok(PERM_U | PERM_R),
+        _ => Err(PERM_NONE),
+    };
 
-    if ent.type_ == ProcMapType::Vvar {
+    if let Ok(perm) = perm {
         unsafe {
-            dune_vm_map_phys(
-                pgroot,
-                ent.begin as *mut c_void,
-                (ent.end - ent.begin) as usize,
-                dune_va_to_pa(ent.begin as *mut c_void),
-                PERM_U | PERM_R,
-            );
+            dune_vm_map_phys(PGROOT, ent.begin as *mut c_void, ent.len(), pa as *mut c_void, perm);
         }
-        return;
     }
 }
- 
-fn __setup_mappings_full(layout: &DuneLayout) -> io::Result<()> {
-    dune_vm_map_phys(pgroot, 0 as *mut c_void, 1 << 32, 0 as *mut c_void, PERM_R | PERM_W | PERM_X | PERM_U)?;
 
-    dune_vm_map_phys(pgroot, layout.base_map() as *mut c_void, GPA_MAP_SIZE, dune_mmap_addr_to_pa(layout.base_map() as *mut c_void), PERM_R | PERM_W | PERM_X | PERM_U)?;
+// use dune_sys::dune::DuneLayout;
 
-    dune_vm_map_phys(pgroot, layout.base_stack() as *mut c_void, GPA_STACK_SIZE, dune_stack_addr_to_pa(layout.base_stack() as *mut c_void), PERM_R | PERM_W | PERM_X | PERM_U)?;
+unsafe fn __setup_mappings_full(layout: &DuneLayout) -> io::Result<()> {
+    // Map the entire address space
+    let va = 0 as *mut c_void;
+    let pa = 0 as *mut c_void;
+    let len = 1 << 32; // 4GB
+    let perm = PERM_R | PERM_W | PERM_X | PERM_U;
+    dune_vm_map_phys(PGROOT, va, len, pa, perm);
 
-    dune_vm_map_phys(pgroot, PAGEBASE as *mut c_void, MAX_PAGES * PGSIZE, dune_va_to_pa(PAGEBASE as *mut c_void), PERM_R | PERM_W | PERM_BIG)?;
+    // Map the base_map region
+    let va = layout.base_map();
+    let pa = dune_mmap_addr_to_pa(va);
+    let len = GPA_MAP_SIZE as u64;
+    let perm = PERM_R | PERM_W | PERM_X | PERM_U;
+    dune_vm_map_phys(PGROOT, va, len, pa, perm);
+
+    // Map the base_stack region
+    let va = layout.base_stack();
+    let pa = dune_stack_addr_to_pa(va);
+    let len = GPA_STACK_SIZE as u64;
+    let perm = PERM_R | PERM_W | PERM_X | PERM_U;
+    dune_vm_map_phys(PGROOT, layout.base_stack(), len, pa, perm);
+
+    // Map the page table region
+    let va = PAGEBASE.as_u64() as *mut c_void;
+    let pa = dune_va_to_pa(va);
+    let len = MAX_PAGES as u64 * PGSIZE;
+    let perm = PERM_R | PERM_W | PERM_BIG;
+    dune_vm_map_phys(PGROOT, va, len, pa, perm);
 
     dune_procmap_iterate(setup_vdso_cb);
     setup_vsyscall();
@@ -409,16 +425,18 @@ fn __setup_mappings_full(layout: &DuneLayout) -> io::Result<()> {
     Ok(())
 }
 
-fn setup_mappings(full: bool) -> io::Result<()> {
-    let mut layout: DuneLayout = unsafe { mem::zeroed() };
-    let ret = unsafe { ioctl(dune_fd, DUNE_GET_LAYOUT, &mut layout) };
+pub unsafe fn setup_mappings(full: bool) -> io::Result<()> {
+    let mut layout: DuneLayout = mem::zeroed();
+    let ret = ioctl(DUNE_FD, DUNE_GET_LAYOUT, &mut layout);
     if ret != 0 {
         return Err(io::Error::from_raw_os_error(ret));
     }
 
-    phys_limit = layout.phys_limit();
-    mmap_base = layout.base_map();
-    stack_base = layout.base_stack();
+    unsafe {
+        PHYS_LIMIT = layout.phys_limit();
+        MMAP_BASE = layout.base_map();
+        STACK_BASE = layout.base_stack();
+    }
 
     if full {
         __setup_mappings_full(&layout)
@@ -429,7 +447,7 @@ fn setup_mappings(full: bool) -> io::Result<()> {
 
 fn create_percpu() -> Option<DunePercpu> {
     let mut fs_base: u64 = 0;
-    if unsafe { arch_prctl(ARCH_GET_FS, &mut fs_base) } == -1 {
+    if unsafe { arch_prctl(ARCH_GET_FS, &mut fs_base as *mut u64 as *mut c_void) } == -1 {
         eprintln!("dune: failed to get FS register");
         return None;
     }
@@ -437,7 +455,7 @@ fn create_percpu() -> Option<DunePercpu> {
     let percpu = unsafe {
         mmap(
             ptr::null_mut(),
-            PGSIZE,
+            PGSIZE as usize,
             PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS,
             -1,
@@ -458,7 +476,7 @@ fn create_percpu() -> Option<DunePercpu> {
     }
 
     if let Err(_) = unsafe { setup_safe_stack(&mut *percpu) } {
-        unsafe { munmap(percpu as *mut c_void, PGSIZE) };
+        unsafe { munmap(percpu as *mut c_void, PGSIZE as usize) };
         return None;
     }
 
@@ -467,7 +485,7 @@ fn create_percpu() -> Option<DunePercpu> {
 
 fn free_percpu(percpu: &DunePercpu) {
     // XXX free stack
-    unsafe { munmap(percpu as *const _ as *mut c_void, PGSIZE) };
+    unsafe { munmap(percpu as *const _ as *mut c_void, PGSIZE as usize) };
 }
 
 fn map_stack_cb(e: &DuneProcmapEntry) {
@@ -487,30 +505,27 @@ fn map_stack() {
 
 pub type PhysaddrT = u64;
 
-fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
+#[no_mangle]
+unsafe extern "C" fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
     map_stack();
 
     let mut conf = DuneConfig::default();
-    conf.set_vcpu(0);
-    conf.set_rip(&__dune_ret as *const _ as u64);
-    conf.set_rsp(0);
-    conf.set_cr3(pgroot as PhysaddrT);
-    conf.set_rflags(0x2);
+    conf.set_vcpu(0)
+        .set_rip(&__dune_ret as *const _ as u64)
+        .set_rsp(0)
+        .set_cr3(PGROOT as u64)
+        .set_rflags(0x2);
 
     // NOTE: We don't setup the general purpose registers because __dune_ret
     // will restore them as they were before the __dune_enter call
 
-    let ret = unsafe { __dune_enter(dune_fd, &conf) };
+    let ret = __dune_enter(DUNE_FD, &conf);
     if ret != 0 {
-        eprintln!("dune: entry to Dune mode failed, ret is {}", ret);
+        println!("dune: entry to Dune mode failed, ret is {}", ret);
         return Err(io::Error::new(ErrorKind::Other, "Entry to Dune mode failed"));
     }
 
-    let ret = dune_boot(percpu);
-    if ret != 0 {
-        eprintln!("dune: problem while booting, unrecoverable");
-        dune_die();
-    }
+    dune_boot(percpu);
 
     Ok(())
 }
@@ -521,95 +536,98 @@ fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
   * This function must not return. It can either exit(), __dune_go_dune() or
   * __dune_go_linux().
   */
-pub fn on_dune_exit(conf: *const DuneConfig) -> ! {
-    let conf = unsafe { &*conf };
-    match conf.ret() {
-        DUNE_RET_EXIT => {
+#[no_mangle]
+pub unsafe extern "C" fn on_dune_exit(conf_: *mut DuneConfig) -> ! {
+    let conf = unsafe { &*conf_ };
+    let ret: DuneRetCode = conf.ret().into();
+    match ret {
+        DuneRetCode::Exit => {
             unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
-        }
-        DUNE_RET_EPT_VIOLATION => {
+        },
+        DuneRetCode::EptViolation => {
             println!("dune: exit due to EPT violation");
-        }
-        DUNE_RET_INTERRUPT => {
-            dune_debug_handle_int(conf);
+        },
+        DuneRetCode::Interrupt => {
+            dune_debug_handle_int(conf_);
             println!("dune: exit due to interrupt {}", conf.status());
-        }
-        DUNE_RET_SIGNAL => {
-            __dune_go_dune(dune_fd, conf);
-        }
-        DUNE_RET_UNHANDLED_VMEXIT => {
+        },
+        DuneRetCode::Signal => {
+            __dune_go_dune(DUNE_FD, conf_);
+        },
+        DuneRetCode::UnhandledVmexit => {
             println!("dune: exit due to unhandled VM exit");
-        }
-        DUNE_RET_NOENTER => {
-            println!(
-                "dune: re-entry to Dune mode failed, status is {}",
-                conf.status()
-            );
-        }
+        },
+        DuneRetCode::NoEnter => {
+            println!("dune: re-entry to Dune mode failed, status is {}", conf.status());
+        },
         _ => {
-            println!(
-                "dune: unknown exit from Dune, ret={}, status={}",
-                conf.ret(), conf.status()
-            );
-        }
+            println!("dune: unknown exit from Dune, ret={}, status={}", conf.ret(), conf.status());
+        },
     }
 
     std::process::exit(libc::EXIT_FAILURE);
 }
- 
+
  /**
   * dune_enter - transitions a process to "Dune mode"
   *
   * Can only be called after dune_init().
-  * 
+  *
   * Use this function in each forked child and/or each new thread
   * if you want to re-enter "Dune mode".
-  * 
+  *
   * Returns 0 on success, otherwise failure.
   */
-pub fn dune_enter() -> io::Result<()> {
+#[no_mangle]
+pub unsafe extern "C" fn dune_enter() -> io::Result<()> {
     // Check if this process already entered Dune before a fork...
-    if lpercpu.is_some() {
-        return do_dune_enter(lpercpu.as_ref().unwrap());
-    }
+    LPERCPU.with(|percpu| {
+        let mut percpu = percpu.borrow_mut();
+        // if not none then enter
+        if percpu.is_none() {
+            *percpu = create_percpu();
+            // if still none, return error
+            if let None = *percpu {
+                return Err(io::Error::new(ErrorKind::Other, "Failed to create percpu"));
+            }
+        }
 
-    let percpu = create_percpu().ok_or_else(|| io::Error::new(ErrorKind::Other, "Failed to create percpu"))?;
-    if let Err(e) = do_dune_enter(&percpu) {
-        free_percpu(&percpu);
-        return Err(e);
-    }
+        let percpu = percpu.as_mut().unwrap();
+        if let Err(e) = do_dune_enter(percpu) {
+            free_percpu(percpu);
+            return Err(e);
+        } else {
+            Ok(())
+        }
+    });
 
-    lpercpu = Some(percpu);
     Ok(())
 }
 
-pub fn dune_enter_ex(percpu: *mut DunePercpu) -> io::Result<()> {
-    let fs_base = unsafe {
-        let mut fs_base: u64 = 0;
-        if arch_prctl(ARCH_GET_FS, &mut fs_base) == -1 {
-            return Err(io::Error::new(ErrorKind::Other, "Failed to get FS register"));
-        }
-        fs_base
-    };
-
-    unsafe {
-        (*percpu).kfs_base = fs_base;
-        (*percpu).ufs_base = fs_base;
-        (*percpu).in_usermode = 0;
+#[no_mangle]
+pub unsafe extern "C" fn dune_enter_ex(percpu_ptr: *mut DunePercpu) -> io::Result<()> {
+    let mut fs_base: u64 = 0;
+    if arch_prctl(ARCH_GET_FS, &mut fs_base) == -1 {
+        return Err(io::Error::new(ErrorKind::Other, "Failed to get FS register"));
     }
 
-    if let Err(e) = unsafe { setup_safe_stack(&mut *percpu) } {
+    let percpu = &mut *percpu_ptr;
+    percpu.set_kfs_base(fs_base)
+        .set_ufs_base(fs_base)
+        .set_in_usermode(0);
+
+    if let Err(e) = setup_safe_stack(percpu) {
         return Err(e);
     }
 
-    do_dune_enter(unsafe { &mut *percpu })
+    do_dune_enter(percpu)
 }
- 
+
  /**
   * dune_init - initializes libdune
-  * 
+  *
   * @map_full: determines if the full process address space should be mapped
-  * 
+  *
   * Call this function once before using libdune.
   *
   * Dune supports two memory modes. If map_full is true, then every possible
@@ -617,40 +635,41 @@ pub fn dune_enter_ex(percpu: *mut DunePercpu) -> io::Result<()> {
   * that are used (e.g. set up through mmap) are mapped. Full mapping consumes
   * a lot of memory when enabled, but disabling it incurs slight overhead
   * since pages will occasionally need to be faulted in.
-  * 
+  *
   * Returns 0 on success, otherwise failure.
   */
 static DUNE_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-pub fn dune_init(map_full: bool) -> io::Result<()> {
+#[no_mangle]
+pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
     if DUNE_INITIALIZED.load(Ordering::SeqCst) {
         return Ok(());
     }
 
-    dune_fd = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
-    if dune_fd <= 0 {
+    DUNE_FD = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
+    if DUNE_FD <= 0 {
         return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
     }
 
-    pgroot = unsafe { libc::memalign(PGSIZE, PGSIZE) as *mut PteEntry };
-    if pgroot.is_null() {
-        unsafe { libc::close(dune_fd) };
+    PGROOT = unsafe { libc::memalign(PGSIZE, PGSIZE) as *mut PageTableEntry };
+    if PGROOT.is_null() {
+        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Failed to allocate pgroot"));
     }
-    unsafe { ptr::write_bytes(pgroot, 0, PGSIZE) };
+    unsafe { ptr::write_bytes(PGROOT, 0, PGSIZE) };
 
     if dune_page_init().is_err() {
-        unsafe { libc::close(dune_fd) };
+        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Unable to initialize page manager"));
     }
 
     if setup_mappings(map_full).is_err() {
-        unsafe { libc::close(dune_fd) };
+        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Unable to setup memory layout"));
     }
 
     if setup_syscall().is_err() {
-        unsafe { libc::close(dune_fd) };
+        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Unable to setup system calls"));
     }
 
@@ -661,7 +680,7 @@ pub fn dune_init(map_full: bool) -> io::Result<()> {
                 let mut sa: sigaction = unsafe { mem::zeroed() };
                 sa.sa_handler = SIG_IGN;
                 if unsafe { sigaction(i, &sa, ptr::null_mut()) } == -1 {
-                    unsafe { libc::close(dune_fd) };
+                    unsafe { libc::close(DUNE_FD) };
                     return Err(io::Error::new(ErrorKind::Other, format!("sigaction() {}", i)));
                 }
             }
@@ -673,4 +692,3 @@ pub fn dune_init(map_full: bool) -> io::Result<()> {
     DUNE_INITIALIZED.store(true, Ordering::SeqCst);
     Ok(())
 }
- 

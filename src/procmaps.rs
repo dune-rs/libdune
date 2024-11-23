@@ -51,6 +51,46 @@ use std::io::{self, BufRead};
  * ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
  */
 
+ #[derive(Debug, PartialEq)]
+ pub enum ProcMapType {
+     File,
+     Anonymous,
+     Heap,
+     Stack,
+     Vsyscall,
+     Vdso,
+     Vvar,
+     Unknown,
+ }
+
+ fn get_type(path: *const u8) -> ProcMapType {
+     unsafe {
+         let url = std::ffi::CStr::from_ptr(path as *const i8).to_str();
+         if let Ok(url) = url {
+             let url = url.trim();
+             if url.starts_with('/') {
+                 ProcMapType::File
+             } else if url.is_empty() {
+                 ProcMapType::Anonymous
+             } else if url == "[heap]" {
+                 ProcMapType::Heap
+             } else if url.starts_with("[stack") {
+                 ProcMapType::Stack
+             } else if url == "[vsyscall]" {
+                 ProcMapType::Vsyscall
+             } else if url == "[vdso]" {
+                 ProcMapType::Vdso
+             } else if url == "[vvar]" {
+                 ProcMapType::Vvar
+             } else {
+                 ProcMapType::Unknown
+             }
+         } else {
+             ProcMapType::Unknown
+         }
+     }
+ }
+
 #[derive(Debug)]
 pub struct DuneProcmapEntry {
     pub begin: u64,
@@ -61,45 +101,18 @@ pub struct DuneProcmapEntry {
     pub p: bool,
     pub offset: u64,
     pub path: String,
-    pub entry_type: ProcMapType,
+    pub type_: ProcMapType,
 }
 
-#[derive(Debug)]
-pub enum ProcMapType {
-    File,
-    Anonymous,
-    Heap,
-    Stack,
-    Vsyscall,
-    Vdso,
-    Vvar,
-    Unknown,
-}
-fn get_type(path: *const u8) -> ProcMapType {
-    unsafe {
-        if !path.is_null() && *path != b'[' {
-            ProcMapType::File
-        } else if *path == 0 {
-            ProcMapType::Anonymous
-        } else if std::ffi::CStr::from_ptr(path as *const i8).to_str().unwrap() == "[heap]" {
-            ProcMapType::Heap
-        } else if std::ffi::CStr::from_ptr(path as *const i8).to_str().unwrap().starts_with("[stack") {
-            ProcMapType::Stack
-        } else if std::ffi::CStr::from_ptr(path as *const i8).to_str().unwrap() == "[vsyscall]" {
-            ProcMapType::Vsyscall
-        } else if std::ffi::CStr::from_ptr(path as *const i8).to_str().unwrap() == "[vdso]" {
-            ProcMapType::Vdso
-        } else if std::ffi::CStr::from_ptr(path as *const i8).to_str().unwrap() == "[vvar]" {
-            ProcMapType::Vvar
-        } else {
-            ProcMapType::Unknown
-        }
+impl DuneProcmapEntry {
+    pub fn len(&self) -> u64 {
+        self.end - self.begin
     }
 }
 
 pub fn dune_procmap_iterate<F>(mut cb: F) -> io::Result<()>
 where
-    F: FnMut(*const DuneProcmapEntry),
+    F: FnMut(&DuneProcmapEntry),
 {
     let file = File::open("/proc/self/maps")?;
     let reader = io::BufReader::new(file);
@@ -134,10 +147,10 @@ where
             p,
             offset,
             path: path.to_string(),
-            entry_type: get_type(path.as_ptr()),
+            type_: get_type(path.as_ptr()),
         };
 
-        cb(&entry as *const DuneProcmapEntry);
+        cb(&entry);
     }
 
     Ok(())
