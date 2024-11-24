@@ -5,7 +5,7 @@ use std::ptr;
 use std::arch::asm;
 use std::sync::atomic::{AtomicBool, Ordering};
 use dune_sys::funcs;
-use libc::{c_void, mmap, munmap, open, O_RDWR, PROT_READ, PROT_WRITE, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, sigaction, SIG_IGN, SIGTSTP, SIGSTOP, SIGKILL, SIGCHLD, SIGINT, SIGTERM};
+use libc::{c_void, mmap, munmap, open, O_RDWR, PROT_READ, PROT_WRITE, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE};
 use x86_64::structures::paging::PageTableFlags;
 use std::mem::offset_of;
 use libc::ioctl;
@@ -565,19 +565,7 @@ pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
         return Err(io::Error::new(ErrorKind::Other, "Unable to setup system calls"));
     }
 
-    for i in 1..32 {
-        match i {
-            SIGTSTP | SIGSTOP | SIGKILL | SIGCHLD | SIGINT | SIGTERM => continue,
-            _ => {
-                let mut sa: sigaction = unsafe { mem::zeroed() };
-                sa.sa_handler = SIG_IGN;
-                if unsafe { sigaction(i, &sa, ptr::null_mut()) } == -1 {
-                    unsafe { libc::close(DUNE_FD) };
-                    return Err(io::Error::new(ErrorKind::Other, format!("sigaction() {}", i)));
-                }
-            }
-        }
-    }
+    setup_signals()?;
 
     setup_idt();
 
