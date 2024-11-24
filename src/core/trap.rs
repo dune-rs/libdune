@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicPtr;
 use x86_64::structures::paging::page_table::{PageTableEntry, PageTableFlags};
 use std::ptr;
-use libc::{c_void};
+use libc::c_void;
 
 pub const IDT_ENTRIES: usize = 256;
 pub const DUNE_SIGNAL_INTR_BASE: usize = 32;
@@ -24,7 +24,7 @@ pub type DuneIntrCb = fn(&mut DuneTf);
 
 static SYSCALL_CB: AtomicPtr<DuneSyscallCb> = AtomicPtr::new(ptr::null_mut());
 static PGFLT_CB: AtomicPtr<DunePgfltCb> = AtomicPtr::new(ptr::null_mut());
-static INTR_CBS: [AtomicPtr<DuneIntrCb>; IDT_ENTRIES] = [AtomicPtr::new(ptr::null_mut()); IDT_ENTRIES];
+static INTR_CBS: [AtomicPtr<DuneIntrCb>; IDT_ENTRIES] = [const { AtomicPtr::new(ptr::null_mut()) }; IDT_ENTRIES];
 
 #[inline(always)]
 fn read_cr2() -> u64 {
