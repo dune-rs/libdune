@@ -160,6 +160,7 @@ pub unsafe extern "C" fn on_dune_exit(conf_: *mut DuneConfig) -> ! {
             println!("dune: exit due to EPT violation");
         },
         DuneRetCode::Interrupt => {
+            #[cfg(feature = "debug")]
             dune_debug_handle_int(conf_);
             println!("dune: exit due to interrupt {}", conf.status());
         },

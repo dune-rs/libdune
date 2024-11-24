@@ -29,7 +29,7 @@ impl Tptr {
 #[derive(Debug, Copy, Clone, Default)]
 struct Tss {
     reserved0: u32,
-    tss_rsp: [u64; 3], // Stack pointer for CPL 0, 1, 2
+    pub tss_rsp: [u64; 3], // Stack pointer for CPL 0, 1, 2
     reserved1: u64,
     tss_ist: [u64; 7], // Note: tss_ist[0] is ignored
     reserved2: u64,
@@ -67,7 +67,7 @@ pub struct DunePercpu {
     kfs_base: u64,
     ufs_base: u64,
     in_usermode: u64,
-    tss: Tss,
+    pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
 }
 

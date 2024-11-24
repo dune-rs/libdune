@@ -1,7 +1,7 @@
 use std::ptr;
-use x86_64::registers::model_specific::GsBase;
 
-use dune_sys::*;
+use dune_sys::funcs;
+
 use crate::globals::*;
 
 use super::__dune_intr;
@@ -17,15 +17,38 @@ pub struct IdtDescriptor {
     zero: u32,
 }
 
-impl From<usize> for IdtDescriptor {
-    fn from(val: usize) -> Self {
-        let mut id = IdtDescriptor::default();
-        id.low = (val & 0xFFFF) as u16;
-        id.middle = ((val >> 16) & 0xFFFF) as u16;
-        id.high = ((val >> 32) & 0xFFFFFFFF) as u32;
-        id
+impl IdtDescriptor {
+    funcs!(low, u16);
+    funcs!(selector, u16);
+    funcs!(ist, u8);
+    funcs!(type_attr, u8);
+    funcs!(middle, u16);
+    funcs!(high, u32);
+    funcs!(zero, u32);
+
+    pub fn new() -> Self {
+        IdtDescriptor::default()
+    }
+
+    pub fn clear(&mut self) -> &mut Self {
+        self.low = 0;
+        self.selector = 0;
+        self.ist = 0;
+        self.type_attr = 0;
+        self.middle = 0;
+        self.high = 0;
+        self.zero = 0;
+        self
+    }
+
+    pub fn set_idt_addr(&mut self, addr: usize) -> &mut Self {
+        self.low = (addr & 0xFFFF) as u16;
+        self.middle = ((addr >> 16) & 0xFFFF) as u16;
+        self.high = ((addr >> 32) & 0xFFFFFFFF) as u32;
+        self
     }
 }
+
 
 pub static mut IDT: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
 
@@ -33,26 +56,25 @@ const ISR_LEN: usize = 16;
 
 pub fn setup_idt() {
     for i in 0..IDT_ENTRIES {
-        let id = unsafe { &mut IDT[i] };
+        let id = &mut unsafe { IDT }[i];
         let mut isr = __dune_intr as usize;
 
         isr += ISR_LEN * i;
-        ptr::write_bytes(id as *mut IdtDescriptor, 0, 1);
-
-        id.selector = GD_KT as u16;
-        id.type_attr = IDTD_P | IDTD_TRAP_GATE;
+        id.clear()
+            .set_selector(GD_KT as u16)
+            .set_type_attr(IDTD_P | IDTD_TRAP_GATE);
 
         match i {
             T_BRKPT => {
                 id.type_attr |= IDTD_CPL3;
-                id.ist = 1;
+                id.set_ist(1);
             }
             T_DBLFLT | T_NMI | T_MCHK => {
-                id.ist = 1;
+                id.set_ist(1);
             }
             _ => {}
         }
 
-        id = isr.into();
+        id.set_idt_addr(isr);
     }
 }
