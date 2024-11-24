@@ -21,25 +21,12 @@ use crate::globals::*;
 use crate::mm::*;
 use crate::utils::*;
 use crate::syscall::*;
+use crate::core::*;
 
 // static mut pgroot: *mut PageTableEntry = ptr::null_mut();
 // pub static mut phys_limit: UintptrT = 0;
 // pub static mut mmap_base: UintptrT = 0;
 // pub static mut stack_base: UintptrT = 0;
-
-#[repr(packed)]
-#[derive(Debug, Copy, Clone, Default)]
-struct IdtDescriptor {
-    low: u16,
-    selector: u16,
-    ist: u8,
-    type_attr: u8,
-    middle: u16,
-    high: u32,
-    zero: u32,
-}
-
-static mut IDT: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
 
 static GDT_TEMPLATE: [u64; NR_GDT_ENTRIES] = [
     0,
@@ -196,41 +183,6 @@ unsafe fn dune_boot(_percpu: *mut DunePercpu) {
     // STEP 6: FS and GS require special initialization on 64-bit
     FsBase::write!(VirtAddr::new(percpu.kfs_base));
     GsBase::write!(VirtAddr::new(percpu as *const _ as u64));
-}
-
-const ISR_LEN: usize = 16;
-
-fn set_idt_addr(id: &mut IdtDescriptor, addr: u64) {
-    id.low = (addr & 0xFFFF) as u16;
-    id.middle = ((addr >> 16) & 0xFFFF) as u16;
-    id.high = ((addr >> 32) & 0xFFFFFFFF) as u32;
-}
-
-unsafe fn setup_idt() {
-    for i in 0..IDT_ENTRIES {
-        let id = &mut IDT[i];
-        let mut isr = __dune_intr as usize;
-
-        isr += ISR_LEN * i;
-        ptr::write_bytes(id as *mut IdtDescriptor, 0, 1);
-
-        id.selector = GD_KT;
-        id.type_attr = IDTD_P | IDTD_TRAP_GATE;
-
-        match i {
-            T_BRKPT => {
-                id.type_attr |= IDTD_CPL3;
-                id.ist = 1;
-                // fallthrough
-            }
-            T_DBLFLT | T_NMI | T_MCHK => {
-                id.ist = 1;
-            }
-            _ => {}
-        }
-
-        set_idt_addr(id, isr as u64);
-    }
 }
 
 fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
