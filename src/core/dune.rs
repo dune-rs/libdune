@@ -9,11 +9,11 @@ use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGE
 use crate::{core::*, dune_vm_lookup, dune_vm_map_phys, globals::PGSIZE, CreateType};
 
 unsafe fn dune_mmap_addr_to_pa(ptr: *mut c_void) -> UintptrT {
-    (ptr as UintptrT) - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
+    ((ptr as u64) - (MMAP_BASE as u64) + (PHYS_LIMIT as u64) - GPA_STACK_SIZE - GPA_MAP_SIZE) as UintptrT
 }
 
 unsafe fn dune_stack_addr_to_pa(ptr: *mut c_void) -> UintptrT {
-    (ptr as UintptrT) - STACK_BASE + PHYS_LIMIT - GPA_STACK_SIZE
+    ((ptr as u64) - (STACK_BASE as u64) + (PHYS_LIMIT as u64) - GPA_STACK_SIZE) as UintptrT
 }
 
 unsafe fn dune_va_to_pa(ptr: *mut c_void) -> UintptrT {
@@ -30,9 +30,8 @@ unsafe fn map_ptr(p: *mut c_void, len: usize) {
     // Align the pointer to the page size
     let page = (p as usize & !(PGSIZE - 1)) as *mut c_void;
     let page_end = p.add(len + PGSIZE - 1).mask(!(PGSIZE - 1));
-    let len = page_end.sub(page);
-    let ptr = page as *mut c_void;
-    let pa = dune_va_to_pa(ptr) as *mut c_void;
+    let len = page_end as u64 - page as u64;
+    let pa = dune_va_to_pa(page);
 
     dune_vm_map_phys(PGROOT, page, len, pa, PERM_R | PERM_W);
 }

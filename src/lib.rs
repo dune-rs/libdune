@@ -1,4 +1,5 @@
 #![feature(thread_local)]
+#![feature(ptr_mask)]
 #[macro_use]
 pub mod globals;
 pub mod core;
