@@ -4,10 +4,10 @@ use std::mem;
 // use std::os::unix::io::AsRawFd;
 use libc::{mmap, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_HUGETLB, PROT_READ, PROT_WRITE};
 use x86_64::PhysAddr;
+use dune_sys::*;
 // use crate::globals::*;
-use crate::globals::PAGEBASE;
 use crate::globals::*;
-use crate::funcs;
+use crate::utils::*;
 
 pub const PAGEBASE: PhysAddr = PhysAddr::new(0x200000000);
 // const PGSIZE: usize = 4096;

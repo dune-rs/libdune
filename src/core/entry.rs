@@ -18,12 +18,9 @@ use dune_sys::dune::{DuneConfig, DuneRetCode,DuneLayout};
 use dune_sys::dev::{DuneDevice,DUNE_ENTER,DUNE_GET_SYSCALL,DUNE_GET_LAYOUT,DUNE_TRAP_ENABLE,DUNE_TRAP_DISABLE};
 
 use crate::globals::*;
-use crate::page::*;
-use crate::procmaps::*;
-use crate::dune::*;
-use crate::debug::*;
-use crate::util::*;
-use crate::vm::*;
+use crate::mm::*;
+use crate::utils::*;
+use crate::syscall::*;
 
 // static mut pgroot: *mut PageTableEntry = ptr::null_mut();
 // pub static mut phys_limit: UintptrT = 0;

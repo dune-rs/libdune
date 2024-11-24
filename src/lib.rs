@@ -1,22 +1,17 @@
 #![feature(thread_local)]
 #[macro_use]
 pub mod globals;
-pub mod dune;
-pub mod entry;
-pub mod page;
-pub mod procmaps;
-pub mod trap;
-pub mod util;
-pub mod vm;
-pub mod debug;
+pub mod core;
+pub mod mm;
+pub mod fpu;
+pub mod syscall;
+pub mod utils;
 
-pub use crate::dune::*;
-pub use crate::entry::*;
-pub use crate::trap::*;
-pub use crate::util::*;
-pub use crate::procmaps::*;
-pub use crate::vm::*;
-pub use crate::debug::*;
+pub use crate::core::*;
+pub use crate::mm::*;
+pub use crate::fpu::*;
+pub use crate::syscall::*;
+pub use crate::utils::*;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right

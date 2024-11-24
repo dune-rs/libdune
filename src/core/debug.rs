@@ -5,7 +5,7 @@ use libc::ioctl;
 use dune_sys::*;
 
 use crate::globals::*;
-use crate::dune::*;
+use crate::core::dune::*;
 
 static mut TRAP_REGS: DuneTrapRegs = DuneTrapRegs::default();
 

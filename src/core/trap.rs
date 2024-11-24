@@ -2,12 +2,10 @@
  * trap.c - x86 fault handling
  */
 use dune_sys::trap::DuneTf;
-use crate::vm::dune_vm_lookup;
-use crate::util::{dune_printf, dune_die};
-use crate::procmaps::dune_procmap_dump;
+use crate::core::*;
+use crate::mm::*;
+use crate::utils::*;
 use crate::globals::*;
-use crate::vm::*;
-use crate::dune::PGROOT;
 
 use std::arch::asm;
 use std::sync::atomic::Ordering;

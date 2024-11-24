@@ -7,8 +7,7 @@ use std::sync::Mutex;
 use x86_64::structures::paging::page_table::PageTableEntry;
 use x86_64::structures::paging::page_table::PageTableFlags;
 use crate::globals::*;
-use crate::page::*;
-use crate::dune::*;
+use crate::mm::*;
 
 macro_rules! PDADDR {
     ($n:expr, $i:expr) => {
