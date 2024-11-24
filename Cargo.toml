@@ -15,3 +15,4 @@ paste = "1.0.15"
 x86_64 = "0.15.1"
 dune-sys = { path = "../dune-sys" }
 log = { version = "0.4.22", features = ["max_level_debug", "release_max_level_warn"] }
+chrono = "0.4.38"
