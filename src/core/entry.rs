@@ -1,13 +1,12 @@
+use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use dune_sys::{DuneDevice, UintptrT};
-use libc::open;
+use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, UintptrT};
+use libc::{open, O_RDWR};
 use x86_64::structures::paging::page_table::PageTableEntry;
 
 use crate::globals::*;
 use crate::mm::*;
-use crate::syscall::*;
 use crate::core::*;
 
 use std::cell::RefCell;
@@ -55,7 +54,7 @@ pub unsafe extern "C" fn dune_enter() -> io::Result<()> {
         let mut percpu = percpu.borrow_mut();
         // if not none then enter
         if percpu.is_none() {
-            *percpu = create_percpu();
+            *percpu = DunePercpu::create();
             // if still none, return error
             if let None = *percpu {
                 return Err(io::Error::new(ErrorKind::Other, "Failed to create percpu"));
@@ -64,7 +63,7 @@ pub unsafe extern "C" fn dune_enter() -> io::Result<()> {
 
         let percpu = percpu.as_mut().unwrap();
         if let Err(e) = do_dune_enter(percpu) {
-            free_percpu(percpu);
+            percpu.free();
             return Err(e);
         } else {
             Ok(())
@@ -89,14 +88,8 @@ pub unsafe extern "C" fn dune_enter() -> io::Result<()> {
   *
   * Returns 0 on success, otherwise failure.
   */
-static DUNE_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
 #[no_mangle]
 pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
-    if DUNE_INITIALIZED.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
     DUNE_FD = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
     if DUNE_FD <= 0 {
         return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
@@ -128,7 +121,6 @@ pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
 
     setup_idt();
 
-    DUNE_INITIALIZED.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -148,4 +140,42 @@ pub unsafe extern "C" fn dune_init_and_enter() -> io::Result<()> {
     }
 
     dune_enter()
+}
+
+/**
+ * on_dune_exit - handle Dune exits
+ *
+ * This function must not return. It can either exit(), __dune_go_dune() or
+ * __dune_go_linux().
+ */
+#[no_mangle]
+pub unsafe extern "C" fn on_dune_exit(conf_: *mut DuneConfig) -> ! {
+    let conf = unsafe { &*conf_ };
+    let ret: DuneRetCode = conf.ret().into();
+    match ret {
+        DuneRetCode::Exit => {
+            unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
+        },
+        DuneRetCode::EptViolation => {
+            println!("dune: exit due to EPT violation");
+        },
+        DuneRetCode::Interrupt => {
+            dune_debug_handle_int(conf_);
+            println!("dune: exit due to interrupt {}", conf.status());
+        },
+        DuneRetCode::Signal => {
+            __dune_go_dune(DUNE_FD, conf_);
+        },
+        DuneRetCode::UnhandledVmexit => {
+            println!("dune: exit due to unhandled VM exit");
+        },
+        DuneRetCode::NoEnter => {
+            println!("dune: re-entry to Dune mode failed, status is {}", conf.status());
+        },
+        _ => {
+            println!("dune: unknown exit from Dune, ret={}, status={}", conf.ret(), conf.status());
+        },
+    }
+
+    std::process::exit(libc::EXIT_FAILURE);
 }

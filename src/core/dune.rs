@@ -1,9 +1,12 @@
-use std::ptr;
-use libc::*;
-use lazy_static::lazy_static;
-use std::sync::Mutex;
+use std::arch::asm;
+use std::{mem, ptr};
+use std::{ffi::c_void, io};
+use libc::ioctl;
+use x86_64::{structures::paging::{page_table::PageTableEntry, PageTableFlags}, PhysAddr};
 use dune_sys::*;
-use dune_sys::dev::DuneDevice;
+use crate::globals::{PERM_BIG, PERM_NONE, PERM_R, PERM_U, PERM_W, PERM_X};
+use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE};
+use crate::{core::*, dune_vm_lookup, dune_vm_map_phys, globals::PGSIZE, CreateType};
 
 unsafe fn dune_mmap_addr_to_pa(ptr: *mut c_void) -> UintptrT {
     (ptr as UintptrT) - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
@@ -23,7 +26,7 @@ unsafe fn dune_va_to_pa(ptr: *mut c_void) -> UintptrT {
     }
 }
 
-pub unsafe fn map_ptr(p: *mut c_void, len: usize) {
+unsafe fn map_ptr(p: *mut c_void, len: usize) {
     // Align the pointer to the page size
     let page = (p as usize & !(PGSIZE - 1)) as *mut c_void;
     let page_end = p.add(len + PGSIZE - 1).mask(!(PGSIZE - 1));
@@ -31,7 +34,71 @@ pub unsafe fn map_ptr(p: *mut c_void, len: usize) {
     let ptr = page as *mut c_void;
     let pa = dune_va_to_pa(ptr) as *mut c_void;
 
-    dune_vm_map_phys(PGROOT, pg, len, pa, PERM_R | PERM_W);
+    dune_vm_map_phys(PGROOT, page, len, pa, PERM_R | PERM_W);
+}
+
+#[cfg(feature = "syscall")]
+pub unsafe fn setup_syscall() -> io::Result<()> {
+    let lstar = ioctl(DUNE_FD, DUNE_GET_SYSCALL);
+    if lstar == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let page = mmap(ptr::null_mut(),
+                                (PGSIZE * 2) as usize,
+                                PROT_READ | PROT_WRITE | PROT_EXEC,
+                                MAP_PRIVATE | MAP_ANON,
+                                -1,
+                                0);
+
+    if page == MAP_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+
+    // calculate the page-aligned address
+    let lstara = lstar.bitand(!(PGSIZE - 1));
+    let off = lstar.bitand(PGSIZE - 1);
+
+    unsafe {
+        ptr::copy_nonoverlapping(
+            __dune_syscall as *const u8,
+            (page as *mut u8).add(off as usize),
+            __dune_syscall_end as usize - __dune_syscall as usize,
+        );
+    }
+
+    for i in (0..=PGSIZE).step_by(PGSIZE) {
+        let pa = dune_mmap_addr_to_pa(unsafe { page.add(i) });
+        let mut pte: *mut PageTableEntry = ptr::null_mut();
+        unsafe {
+            let start = (lstara + i as u64) as *mut c_void;
+            dune_vm_lookup(PGROOT, start, CreateType::Normal, &mut pte);
+            *pte = PTE_ADDR!(pa) | PTE_P;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "syscall"))]
+pub unsafe fn setup_syscall() -> io::Result<()> {
+    log::warn!("No syscall support");
+    Ok(())
+}
+
+const VSYSCALL_ADDR: u64 = 0xffffffffff600000;
+
+fn setup_vsyscall() {
+    let mut ptep: *mut PageTableEntry = ptr::null_mut();
+    unsafe {
+        let vsyscall_addr = VSYSCALL_ADDR as *mut c_void;
+        let vsyscall_page = &__dune_vsyscall_page as *const _ as *mut c_void;
+        let page = dune_va_to_pa(vsyscall_page);
+        let addr = PhysAddr::new(page as u64);
+        dune_vm_lookup(PGROOT, vsyscall_addr, CreateType::Normal, &mut ptep);
+        let pte = &mut *ptep;
+        pte.set_addr(addr, PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE);
+    }
 }
 
 fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
@@ -101,7 +168,7 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
 fn __setup_mappings_precise() -> io::Result<()> {
     let ret = unsafe {
         let va_start = PAGEBASE.as_u64() as *mut c_void;
-        let len = MAX_PAGES as u64 * PGSIZE;
+        let len = (MAX_PAGES * PGSIZE) as u64;
         let pa_start = dune_va_to_pa(PAGEBASE.as_u64() as *mut c_void) as *mut c_void;
         dune_vm_map_phys(PGROOT, va_start, len, pa_start, PERM_R | PERM_W | PERM_BIG)
     };
@@ -154,7 +221,7 @@ unsafe fn __setup_mappings_full(layout: &DuneLayout) -> io::Result<()> {
     // Map the page table region
     let va = PAGEBASE.as_u64() as *mut c_void;
     let pa = dune_va_to_pa(va);
-    let len = MAX_PAGES as u64 * PGSIZE;
+    let len = (MAX_PAGES * PGSIZE) as u64;
     let perm = PERM_R | PERM_W | PERM_BIG;
     dune_vm_map_phys(PGROOT, va, len, pa, perm);
 
@@ -197,4 +264,26 @@ fn map_stack_cb(e: &DuneProcmapEntry) {
 
 fn map_stack() {
     dune_procmap_iterate(map_stack_cb);
+}
+
+pub trait DuneHook {
+    fn pre_enter(&self, percpu: &mut DunePercpu) -> io::Result<()>;
+    fn post_exit(&self, percpu: &mut DunePercpu) -> io::Result<()>;
+}
+
+// dune-spesicifc routines
+impl DuneHook for DunePercpu {
+    fn pre_enter(&self, _percpu: &mut DunePercpu) -> io::Result<()> {
+        let safe_stack= _percpu.tss.tss_rsp[0] as *mut c_void;
+        unsafe { map_ptr(safe_stack, PGSIZE as usize) };
+
+        unsafe { setup_syscall()? };
+        map_stack();
+
+        Ok(())
+    }
+
+    fn post_exit(&self, _percpu: &mut DunePercpu) -> io::Result<()> {
+        Ok(())
+    }
 }

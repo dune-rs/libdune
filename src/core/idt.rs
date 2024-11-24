@@ -7,7 +7,7 @@ use crate::globals::*;
 use super::__dune_intr;
 #[repr(packed)]
 #[derive(Debug, Copy, Clone, Default)]
-struct IdtDescriptor {
+pub struct IdtDescriptor {
     low: u16,
     selector: u16,
     ist: u8,
@@ -27,7 +27,7 @@ impl From<usize> for IdtDescriptor {
     }
 }
 
-static mut IDT: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
+pub static mut IDT: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
 
 const ISR_LEN: usize = 16;
 
