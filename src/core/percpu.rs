@@ -153,9 +153,10 @@ impl DunePercpu {
         gdtr.set_base(self.gdt.as_ptr() as u64)
             .set_limit((self.gdt.len() * mem::size_of::<u64>() - 1) as u16);
 
+        let idt = IDT.lock().unwrap();
         let mut idtr = Tptr::default();
-        idtr.set_base(unsafe { IDT.as_ptr() } as u64)
-            .set_limit((unsafe { IDT.len() } * mem::size_of::<IdtDescriptor>() - 1) as u16);
+        idtr.set_base(idt.as_ptr() as u64)
+            .set_limit((idt.len() * mem::size_of::<IdtDescriptor>() - 1) as u16);
 
         unsafe {
             asm!(

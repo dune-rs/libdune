@@ -1,4 +1,5 @@
-use std::ptr;
+use std::{ptr, sync::Mutex};
+use lazy_static::lazy_static;
 
 use dune_sys::funcs;
 
@@ -49,17 +50,19 @@ impl IdtDescriptor {
     }
 }
 
-
-pub static mut IDT: [IdtDescriptor; IDT_ENTRIES] = [IdtDescriptor::default(); IDT_ENTRIES];
+lazy_static! {
+    pub static ref IDT: Mutex<[IdtDescriptor; IDT_ENTRIES]> = Mutex::new([IdtDescriptor::default(); IDT_ENTRIES]);
+}
 
 const ISR_LEN: usize = 16;
 
 pub fn setup_idt() {
+    let mut isr = __dune_intr as usize;
+    lazy_static::initialize(&IDT);
     for i in 0..IDT_ENTRIES {
-        let id = &mut unsafe { IDT }[i];
-        let mut isr = __dune_intr as usize;
+        let mut idt = IDT.lock().unwrap();
+        let id = &mut idt[i];
 
-        isr += ISR_LEN * i;
         id.clear()
             .set_selector(GD_KT as u16)
             .set_type_attr(IDTD_P | IDTD_TRAP_GATE);
@@ -76,5 +79,6 @@ pub fn setup_idt() {
         }
 
         id.set_idt_addr(isr);
+        isr += ISR_LEN;
     }
 }
