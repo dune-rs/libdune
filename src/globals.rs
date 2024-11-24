@@ -1,6 +1,6 @@
 use std::arch::asm;
 use libc::c_void;
-use x86_64::structures::paging::PageTableEntry;
+use x86_64::structures::paging::page_table::PageTableEntry;
 
 pub const NPTBITS: i32 = 9; // log2(NPageTableEntryRIES)
 pub const NPTLVLS: usize = 3; // page table depth -1

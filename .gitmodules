@@ -1,0 +1,6 @@
+[submodule "kern"]
+	path = kern
+	url = git@github.com:dune-rs/kern.git
+[submodule "libdune"]
+	path = libdune
+	url = git@github.com:dune-rs/libdune.git
