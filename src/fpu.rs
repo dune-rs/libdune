@@ -1,5 +1,5 @@
 
-use std::arch::x86_64::{_fxsave, _fxrstor, _xsave, _xrstor, _xsaveopt, _xrstoropt};
+use std::arch::x86_64::{_fxsave, _fxrstor, _xsave, _xrstor, _xsaveopt};
 
 #[repr(C, align(16))]
 pub struct FxSaveArea {

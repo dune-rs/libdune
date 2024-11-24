@@ -1,17 +1,13 @@
 use std::ffi::CString;
-// use std::io::Write;
 use std::os::raw::{c_char, c_int, c_void};
-use std::ptr;
-// use std::slice;
 use std::str;
 use libc::SIG_ERR;
-// use c strlen
 use libc::strlen;
 use libc::signal;
 use std::arch::asm;
+use dune_sys::DuneTf;
 
-use crate::dune::*;
-use crate::trap::*;
+use crate::core::*;
 
 type SigHandler = fn(c_int);
 

@@ -29,7 +29,7 @@ struct Tss {
 
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
-struct DunePercpu {
+pub struct DunePercpu {
     percpu_ptr: u64,
     tmp: u64,
     kfs_base: u64,
@@ -45,6 +45,27 @@ impl DunePercpu {
     funcs!(kfs_base, u64);
     funcs!(ufs_base, u64);
     funcs!(in_usermode, u64);
+}
+
+pub trait DuneHook {
+    fn pre_enter(&self, percpu: &mut DunePercpu) -> io::Result<()>;
+    fn post_exit(&self, percpu: &mut DunePercpu) -> io::Result<()>;
+}
+
+// dune-spesicifc routines
+impl DuneHook for DunePercpu {
+    fn pre_enter(&self, _percpu: &mut DunePercpu) -> io::Result<()> {
+        let safe_stack= _percpu.tss.tss_rsp[0] as *mut c_void;
+        unsafe { map_ptr(safe_stack, PGSIZE as usize) };
+
+        setup_gdt(_percpu);
+        Ok(())
+    }
+
+    fn post_exit(&self, _percpu: &mut DunePercpu) -> io::Result<()> {
+        dune_boot(percpu);
+        Ok(())
+    }
 }
 
 pub fn dune_get_user_fs() -> u64 {
@@ -96,9 +117,6 @@ fn setup_safe_stack(percpu: &mut DunePercpu) -> io::Result<()> {
     if safe_stack == MAP_FAILED {
         return Err(io::Error::new(ErrorKind::Other, "Failed to allocate safe stack"));
     }
-
-    // TODO: dune-spesicifc code
-    unsafe { map_ptr(safe_stack, PGSIZE as usize) };
 
     let safe_stack: u64 = unsafe { safe_stack.add(PGSIZE) };
     percpu.tss.tss_iomb = offset_of!(Tss, tss_iopb) as u16;
@@ -159,10 +177,7 @@ fn free_percpu(percpu: &DunePercpu) {
  * dune_boot - Brings the user-level OS online
  * @percpu: the thread-local data
  */
-unsafe fn dune_boot(_percpu: *mut DunePercpu) {
-    let percpu = &mut *_percpu;
-    setup_gdt(percpu);
-
+fn dune_boot(percpu: &mut DunePercpu) {
     let gdtr = Tptr {
         base: percpu.gdt.as_ptr() as u64,
         limit: (percpu.gdt.len() * mem::size_of::<u64>() - 1) as u16,
@@ -217,6 +232,7 @@ pub unsafe extern "C" fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()
         .set_cr3(PGROOT as u64)
         .set_rflags(0x2);
 
+    percpu.pre_enter(percpu)?;
     // NOTE: We don't setup the general purpose registers because __dune_ret
     // will restore them as they were before the __dune_enter call
 
@@ -226,7 +242,7 @@ pub unsafe extern "C" fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()
         return Err(io::Error::new(ErrorKind::Other, "Entry to Dune mode failed"));
     }
 
-    dune_boot(percpu);
+    percpu.post_exit(percpu)?;
 
     Ok(())
 }

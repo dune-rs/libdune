@@ -62,8 +62,8 @@ macro_rules! PPN {
 
 /* page size */
 pub const PGSHIFT: usize = 12; /* log2(PGSIZE) */
-pub const PGSIZE: u64 = 1 << PGSHIFT; /* bytes mapped by a page */
-pub const PGMASK: u64 = PGSIZE - 1;
+pub const PGSIZE: usize = 1 << PGSHIFT; /* bytes mapped by a page */
+pub const PGMASK: usize = PGSIZE - 1;
 
 /* offset in page */
 #[allow(unused_macros)]
@@ -362,12 +362,12 @@ macro_rules! SETGATE {
  * matter, since ia-32e mode ignores most of segment values anyway,
  * but just to be extra careful we match data as well.
  */
-pub const GD_KT: u16 = 0x10;
-pub const GD_KD: u16 = 0x18;
-pub const GD_UD: u16 = 0x28;
-pub const GD_UT: u16 = 0x30;
-pub const GD_TSS: u16 = 0x38;
-pub const GD_TSS2: u16 = 0x40;
+pub const GD_KT: usize = 0x10;
+pub const GD_KD: usize = 0x18;
+pub const GD_UD: usize = 0x28;
+pub const GD_UT: usize = 0x30;
+pub const GD_TSS: usize = 0x38;
+pub const GD_TSS2: usize = 0x40;
 
 pub const ARCH_GET_FS: i32 = 0x1003;
 pub const ARCH_SET_FS: i32 = 0x1004;

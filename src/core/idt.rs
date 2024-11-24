@@ -1,6 +1,10 @@
+use std::ptr;
+use x86_64::registers::model_specific::GsBase;
+
 use dune_sys::*;
 use crate::globals::*;
 
+use super::__dune_intr;
 #[repr(packed)]
 #[derive(Debug, Copy, Clone, Default)]
 struct IdtDescriptor {
@@ -35,7 +39,7 @@ pub fn setup_idt() {
         isr += ISR_LEN * i;
         ptr::write_bytes(id as *mut IdtDescriptor, 0, 1);
 
-        id.selector = GD_KT;
+        id.selector = GD_KT as u16;
         id.type_attr = IDTD_P | IDTD_TRAP_GATE;
 
         match i {
