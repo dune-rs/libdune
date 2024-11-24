@@ -1,5 +1,9 @@
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::fmt::Display;
+use std::str::FromStr;
+
+use dune_sys::funcs;
 // use std::path::Path;
 
 /*
@@ -51,47 +55,42 @@ use std::io::{self, BufRead};
  * ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
  */
 
- #[derive(Debug, PartialEq)]
- pub enum ProcMapType {
-     File,
-     Anonymous,
-     Heap,
-     Stack,
-     Vsyscall,
-     Vdso,
-     Vvar,
-     Unknown,
- }
+#[derive(Debug, Default, PartialEq)]
+pub enum ProcMapType {
+    File,
+    Anonymous,
+    Heap,
+    Stack,
+    Vsyscall,
+    Vdso,
+    Vvar,
+    #[default]
+    Unknown,
+}
 
- fn get_type(path: *const u8) -> ProcMapType {
-     unsafe {
-         let url = std::ffi::CStr::from_ptr(path as *const i8).to_str();
-         if let Ok(url) = url {
-             let url = url.trim();
-             if url.starts_with('/') {
-                 ProcMapType::File
-             } else if url.is_empty() {
-                 ProcMapType::Anonymous
-             } else if url == "[heap]" {
-                 ProcMapType::Heap
-             } else if url.starts_with("[stack") {
-                 ProcMapType::Stack
-             } else if url == "[vsyscall]" {
-                 ProcMapType::Vsyscall
-             } else if url == "[vdso]" {
-                 ProcMapType::Vdso
-             } else if url == "[vvar]" {
-                 ProcMapType::Vvar
-             } else {
-                 ProcMapType::Unknown
-             }
-         } else {
-             ProcMapType::Unknown
-         }
-     }
- }
+impl From<String> for ProcMapType {
+    fn from(s: String) -> Self {
+        if s.starts_with('/') {
+            ProcMapType::File
+        } else if s.is_empty() {
+            ProcMapType::Anonymous
+        } else if s == "[heap]" {
+            ProcMapType::Heap
+        } else if s.starts_with("[stack") {
+            ProcMapType::Stack
+        } else if s == "[vsyscall]" {
+            ProcMapType::Vsyscall
+        } else if s == "[vdso]" {
+            ProcMapType::Vdso
+        } else if s == "[vvar]" {
+            ProcMapType::Vvar
+        } else {
+            ProcMapType::Unknown
+        }
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DuneProcmapEntry {
     pub begin: u64,
     pub end: u64,
@@ -105,21 +104,40 @@ pub struct DuneProcmapEntry {
 }
 
 impl DuneProcmapEntry {
+
+    funcs!(begin, u64);
+    funcs!(end, u64);
+    funcs!(r, bool);
+    funcs!(w, bool);
+    funcs!(x, bool);
+    funcs!(p, bool);
+    funcs!(offset, u64);
+
     pub fn len(&self) -> u64 {
         self.end - self.begin
     }
 }
 
-pub fn dune_procmap_iterate<F>(mut cb: F) -> io::Result<()>
-where
-    F: FnMut(&DuneProcmapEntry),
-{
-    let file = File::open("/proc/self/maps")?;
-    let reader = io::BufReader::new(file);
+impl Display for DuneProcmapEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "0x{:016x}-0x{:016x} {}{}{}{} {:08x} {}",
+            self.begin,
+            self.end,
+            if self.r { 'R' } else { '-' },
+            if self.w { 'W' } else { '-' },
+            if self.x { 'X' } else { '-' },
+            if self.p { 'P' } else { 'S' },
+            self.offset,
+            self.path
+        )
+    }
+}
 
-    for line in reader.lines() {
-        let line = line?;
-        let mut parts = line.split_whitespace();
+impl From<String> for DuneProcmapEntry {
+    fn from(s: String) -> Self {
+        let mut parts = s.split_whitespace();
         let range = parts.next().unwrap();
         let perms = parts.next().unwrap();
         let offset = parts.next().unwrap();
@@ -139,35 +157,35 @@ where
         let offset = u64::from_str_radix(offset, 16).unwrap();
 
         let entry = DuneProcmapEntry {
-            begin,
-            end,
-            r,
-            w,
-            x,
-            p,
+            begin, end,
+            r, w, x, p,
             offset,
             path: path.to_string(),
-            type_: get_type(path.as_ptr()),
+            type_: path.to_string().into(),
         };
 
-        cb(&entry);
+        entry
     }
+}
+
+pub fn dune_procmap_iterate<F>(mut cb: F) -> io::Result<()>
+where
+    F: FnMut(&DuneProcmapEntry),
+{
+    let file = File::open("/proc/self/maps")?;
+    let reader = io::BufReader::new(file);
+    reader.lines().map(|line| {
+        if let Ok(line) = line {
+            let entry = DuneProcmapEntry::from(line);
+            cb(&entry);
+        }
+    });
 
     Ok(())
 }
 
 fn dune_procmap_dump_helper(e: &DuneProcmapEntry) {
-    println!(
-        "0x{:016x}-0x{:016x} {}{}{}{} {:08x} {}",
-        e.begin,
-        e.end,
-        if e.r { 'R' } else { '-' },
-        if e.w { 'W' } else { '-' },
-        if e.x { 'X' } else { '-' },
-        if e.p { 'P' } else { 'S' },
-        e.offset,
-        e.path
-    );
+    println!("{}", e);
 }
 
 pub fn dune_procmap_dump() -> io::Result<()> {
