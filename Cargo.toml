@@ -7,6 +7,9 @@ build = "build.rs"
 [features]
 test = []
 syscall = []
+debug = []
+apic = []
+elf = []
 
 [build-dependencies]
 cc = "1.0"
