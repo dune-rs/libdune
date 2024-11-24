@@ -52,12 +52,6 @@ impl From<CreateType> for i32 {
 
 pub type PageWalkCb = fn(arg: *const c_void, ptep: *mut PageTableEntry, va: *mut c_void) -> i32;
 
-
-// static mut pgroot: *mut PageTableEntry;
-pub static mut PHYS_LIMIT: UintptrT = ptr::null_mut();
-pub static mut MMAP_BASE: UintptrT = ptr::null_mut();
-pub static mut STACK_BASE: UintptrT = ptr::null_mut();
-
 lazy_static! {
     static ref PAGE_MUTEX: Mutex<()> = Mutex::new(());
 }
@@ -85,24 +79,6 @@ fn alloc_page() -> Result<*mut Page, i32> {
 pub fn put_page(page: *mut c_void) {
     let pg = dune_pa2page(PhysAddr::new(page as u64));
     dune_page_put(pg);
-}
-
-pub unsafe fn dune_mmap_addr_to_pa(ptr: *mut c_void) -> UintptrT {
-    (ptr as UintptrT) - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
-}
-
-pub unsafe fn dune_stack_addr_to_pa(ptr: *mut c_void) -> UintptrT {
-    (ptr as UintptrT) - STACK_BASE + PHYS_LIMIT - GPA_STACK_SIZE
-}
-
-pub unsafe fn dune_va_to_pa(ptr: *mut c_void) -> UintptrT {
-    if (ptr as UintptrT) >= STACK_BASE {
-        dune_stack_addr_to_pa(ptr)
-    } else if (ptr as UintptrT) >= MMAP_BASE {
-        dune_mmap_addr_to_pa(ptr)
-    } else {
-        ptr as UintptrT
-    }
 }
 
 pub unsafe fn dune_flush_tlb_one(addr: u64) {

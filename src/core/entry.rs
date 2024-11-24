@@ -13,15 +13,32 @@ use crate::utils::*;
 use crate::syscall::*;
 use crate::core::*;
 
-// static mut pgroot: *mut PageTableEntry = ptr::null_mut();
-// pub static mut phys_limit: UintptrT = 0;
-// pub static mut mmap_base: UintptrT = 0;
-// pub static mut stack_base: UintptrT = 0;
-
 use std::cell::RefCell;
 
 thread_local! {
     static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
+}
+
+pub static mut PHYS_LIMIT: UintptrT = ptr::null_mut();
+pub static mut MMAP_BASE: UintptrT = ptr::null_mut();
+pub static mut STACK_BASE: UintptrT = ptr::null_mut();
+
+unsafe fn dune_mmap_addr_to_pa(ptr: *mut c_void) -> UintptrT {
+    (ptr as UintptrT) - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
+}
+
+unsafe fn dune_stack_addr_to_pa(ptr: *mut c_void) -> UintptrT {
+    (ptr as UintptrT) - STACK_BASE + PHYS_LIMIT - GPA_STACK_SIZE
+}
+
+unsafe fn dune_va_to_pa(ptr: *mut c_void) -> UintptrT {
+    if (ptr as UintptrT) >= STACK_BASE {
+        dune_stack_addr_to_pa(ptr)
+    } else if (ptr as UintptrT) >= MMAP_BASE {
+        dune_mmap_addr_to_pa(ptr)
+    } else {
+        ptr as UintptrT
+    }
 }
 
 pub unsafe fn map_ptr(p: *mut c_void, len: usize) {
@@ -129,8 +146,6 @@ fn setup_vdso_cb(ent: &DuneProcmapEntry) {
         }
     }
 }
-
-// use dune_sys::dune::DuneLayout;
 
 unsafe fn __setup_mappings_full(layout: &DuneLayout) -> io::Result<()> {
     // Map the entire address space

@@ -28,6 +28,7 @@ struct Tss {
 }
 
 #[repr(C, packed)]
+#[derive(Debug, Copy, Clone)]
 struct DunePercpu {
     percpu_ptr: u64,
     tmp: u64,
@@ -89,16 +90,17 @@ fn setup_gdt(percpu: &mut DunePercpu) {
     percpu.gdt[GD_TSS2 >> 3] = SEG_BASEHI!(&percpu.tss);
 }
 
-unsafe fn setup_safe_stack(percpu: &mut DunePercpu) -> io::Result<()> {
+fn setup_safe_stack(percpu: &mut DunePercpu) -> io::Result<()> {
     let safe_stack = mmap(ptr::null_mut(), PGSIZE, PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if safe_stack == MAP_FAILED {
         return Err(io::Error::new(ErrorKind::Other, "Failed to allocate safe stack"));
     }
 
-    map_ptr(safe_stack, PGSIZE);
+    // TODO: dune-spesicifc code
+    unsafe { map_ptr(safe_stack, PGSIZE as usize) };
 
-    let safe_stack: u64 = safe_stack.add(PGSIZE);
+    let safe_stack: u64 = unsafe { safe_stack.add(PGSIZE) };
     percpu.tss.tss_iomb = offset_of!(Tss, tss_iopb) as u16;
 
     for i in 1..8 {
@@ -117,35 +119,35 @@ fn create_percpu() -> Option<DunePercpu> {
         return None;
     }
 
+    use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, munmap, c_void, MAP_FAILED};
     let percpu = unsafe {
-        mmap(
+        let ret = mmap(
             ptr::null_mut(),
             PGSIZE as usize,
             PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS,
             -1,
             0,
-        ) as *mut DunePercpu
+        );
+        if ret == MAP_FAILED {
+            None
+        } else {
+            Some(ret)
+        }
     };
+    percpu.and_then(|ret| {
+        let percpu_ptr = ret as *mut DunePercpu;
+        let percpu = unsafe { &mut *percpu_ptr };
+        percpu.set_kfs_base(fs_base)
+            .set_ufs_base(fs_base)
+            .set_in_usermode(0);
+        if let Err(e) = setup_safe_stack(percpu) {
+            eprintln!("dune: failed to setup safe stack: {}", e);
+            return None;
+        }
 
-    if percpu == MAP_FAILED as *mut DunePercpu {
-        return None;
-    }
-
-    unsafe { map_ptr(percpu as *mut c_void, mem::size_of::<DunePercpu>()) };
-
-    unsafe {
-        (*percpu).kfs_base = fs_base;
-        (*percpu).ufs_base = fs_base;
-        (*percpu).in_usermode = 0;
-    }
-
-    if let Err(_) = unsafe { setup_safe_stack(&mut *percpu) } {
-        unsafe { munmap(percpu as *mut c_void, PGSIZE as usize) };
-        return None;
-    }
-
-    Some(unsafe { ptr::read(percpu) })
+        Some(ptr::read(percpu))
+    })
 }
 
 fn free_percpu(percpu: &DunePercpu) {
