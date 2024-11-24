@@ -2,11 +2,8 @@ use std::ptr;
 use libc::*;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
-use x86_64::structures::gdt::{GlobalDescriptorTable, Descriptor};
 use dune_sys::*;
 use dune_sys::dev::DuneDevice;
-
-use crate::globals::*;
 
 lazy_static! {
     static ref PAGE_MUTEX: Mutex<()> = Mutex::new(());
@@ -14,17 +11,6 @@ lazy_static! {
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
-pub struct Tss {
-    pub tss_rsp: [u64; 3],
-    pub tss_ist: [u64; 8],
-    pub tss_iomb: u16,
-}
-
-extern "C" {
     // assembly routines from dune.S
     pub fn __dune_enter(fd: i32, config: *const DuneConfig) -> i32;
     pub fn __dune_ret() -> i32;
