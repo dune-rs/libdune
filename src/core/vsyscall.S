@@ -1,5 +1,3 @@
-#include <asm/unistd_64.h>
-
 .data
 .globl __dune_vsyscall_page
 .balign 4096, 0xcc

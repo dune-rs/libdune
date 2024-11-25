@@ -52,6 +52,13 @@ global_asm!(
     DUNE_RET_NOENTER = const DUNE_RET_NOENTER,
 );
 
+global_asm!(
+    include_str!("vsyscall.S"),
+    __NR_gettimeofday = const libc::SYS_gettimeofday,
+    __NR_time = const libc::SYS_time,
+    __NR_getcpu = const libc::SYS_getcpu,
+);
+
 thread_local! {
     static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
