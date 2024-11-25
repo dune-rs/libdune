@@ -81,34 +81,27 @@ pub static mut DUNE_DEVICE: Option<DuneDevice> = None;
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_enter() -> io::Result<()> {
+pub unsafe extern "C" fn dune_enter() -> Result<(), i32> {
     // Check if this process already entered Dune before a fork...
     LPERCPU.with(|percpu| {
         let mut percpu = percpu.borrow_mut();
         // if not none then enter
         if percpu.is_none() {
-            *percpu = DunePercpu::create();
+            *percpu = DunePercpu::create().ok();
             // if still none, return error
             if let None = *percpu {
-                return Err(io::Error::new(ErrorKind::Other, "Failed to create percpu"));
+                return Err(-1);
             }
         }
 
         let percpu = percpu.as_mut().unwrap();
-        if let Err(e) = do_dune_enter(percpu) {
+        do_dune_enter(percpu).map_err(|e|{
             percpu.free();
-            return Err(e);
-        } else {
-            Ok(())
-        }
+            e
+        })
     });
 
     Ok(())
-}
-
-enum DuneError {
-    DuneEnter,
-    DuneExit,
 }
 
  /**
@@ -127,18 +120,21 @@ enum DuneError {
   * Returns 0 on success, otherwise failure.
   */
 #[no_mangle]
-pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
+pub extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
     let dune_fd = &mut *DUNE_FD.lock().unwrap();
     *dune_fd = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
     if *dune_fd <= 0 {
         return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
     }
 
+    // Initialize the root page table
     lazy_static::initialize(&PGROOT);
-    // let mut pgroot = PGROOT.lock();
-    // pgroot.zero();
 
-    // unsafe { ptr::write_bytes(PGROOT, 0, PGSIZE) };
+    // Zero out the root page table
+    PGROOT.lock().as_deref_mut().and_then(|pgroot|{
+        pgroot.zero();
+        Ok(())
+    });
 
     if dune_page_init().is_err() {
         return Err(io::Error::new(ErrorKind::Other, "Unable to initialize page manager"));

@@ -59,7 +59,9 @@ impl PageList {
 
 pub static mut PAGES: *mut Page = ptr::null_mut();
 pub static mut NUM_PAGES: usize = 0;
-pub static mut PAGES_FREE: PageList = PageList::new();
+use std::sync::LazyLock;
+
+pub static PAGES_FREE: LazyLock<std::sync::Mutex<PageList>> = LazyLock::new(|| std::sync::Mutex::new(PageList::new()));
 
 fn do_mapping(base: *mut libc::c_void, len: usize) -> Result<*mut libc::c_void, i32> {
     let mem = unsafe {
@@ -83,7 +85,7 @@ fn grow_size() -> Result<(), i32> {
         do_mapping(base, GROW_SIZE * PGSIZE)?;
 
         for i in NUM_PAGES..new_num_pages {
-            let page = (PAGEBASE + (i * PGSIZE) as u64).as_u64() as *mut Page;
+            PAGES_FREE.lock().unwrap().push_front(Box::from_raw(page));
             ptr::write(page, Page::new());
             PAGES_FREE.push_front(Box::from_raw(page));
         }
@@ -98,8 +100,7 @@ pub fn dune_page_alloc() -> Result<*mut Page, i32> {
         if PAGES_FREE.is_empty() {
             grow_size()?;
         }
-
-        let mut page = PAGES_FREE.pop_front().unwrap();
+        let mut page = PAGES_FREE.lock().unwrap().pop_front().unwrap();
         (*page).ref_count = 1;
         Ok(Box::into_raw(page))
     }
@@ -114,7 +115,7 @@ pub fn dune_page_free(page: *mut Page) {
 
 pub fn dune_page_stats() {
     unsafe {
-        let num_alloc = NUM_PAGES - PAGES_FREE.head.as_ref().map_or(0, |head| {
+        let num_alloc = NUM_PAGES - PAGES_FREE.lock().unwrap().head.as_ref().map_or(0, |head| {
             let mut count = 0;
             let mut current = Some(head);
             while let Some(node) = current {

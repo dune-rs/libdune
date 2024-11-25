@@ -170,11 +170,11 @@ impl From<String> for DuneProcmapEntry {
     }
 }
 
-pub fn dune_procmap_iterate<F>(mut cb: F) -> io::Result<()>
+pub fn dune_procmap_iterate<F>(mut cb: F) -> Result<(), i32>
 where
     F: FnMut(&DuneProcmapEntry) -> Result<(), i32>,
 {
-    let file = File::open("/proc/self/maps")?;
+    let file = File::open("/proc/self/maps").map_err(|e| 1)?;
     let reader = io::BufReader::new(file);
     reader.lines().map(|line| {
         if let Ok(line) = line {
@@ -191,7 +191,7 @@ fn dune_procmap_dump_helper(e: &DuneProcmapEntry) -> Result<(), i32> {
     Ok(())
 }
 
-pub fn dune_procmap_dump() -> io::Result<()> {
+pub fn dune_procmap_dump() -> Result<(), i32> {
     println!("--- Process Map Dump ---");
     dune_procmap_iterate(dune_procmap_dump_helper)
 }

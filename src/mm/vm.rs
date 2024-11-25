@@ -226,11 +226,12 @@ pub fn dune_vm_lookup(
     addr: VirtAddr,
     create: CreateType,
 ) -> Result<&mut PageTableEntry, i32> {
-    let i = addr.p4_index();
-    let j = addr.p3_index();
-    let k = addr.p2_index();
-    let l = addr.p1_index();
-    let pdpte = if !root[i].flags().contains(PageTableFlags::PRESENT) {
+    let i = addr.p4_index(); // P4D
+    let j = addr.p3_index(); // PMD
+    let k = addr.p2_index(); // PD
+    let l = addr.p1_index(); // PT
+    let p4de = &mut root[i];
+    let pdpt = if !p4de.flags().contains(PageTableFlags::PRESENT) {
         if create == CreateType::None {
             return Err(-libc::ENOENT);
         }
@@ -238,7 +239,7 @@ pub fn dune_vm_lookup(
         let pdptep = alloc_page()
             .map_or(Err(-libc::ENOMEM), |addr|{
                 let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-                root[i].set_addr(addr, flags);
+                p4de.set_addr(addr, flags);
                 // VA == PA
                 Ok(addr.as_u64() as *mut PageTable)
             })?;
@@ -248,10 +249,11 @@ pub fn dune_vm_lookup(
             &mut *(pdptep)
         }
     } else {
-        unsafe { &mut *(root[i].addr().as_u64() as *mut PageTable) }
+        unsafe { &mut *(p4de.addr().as_u64() as *mut PageTable) }
     };
 
-    let pde = if !pdpte[j].flags().contains(PageTableFlags::PRESENT) {
+    let pdpte = &mut pdpt[j];
+    let pd = if !pdpte.flags().contains(PageTableFlags::PRESENT) {
         if create == CreateType::None {
             return Err(-libc::ENOENT);
         }
@@ -259,7 +261,7 @@ pub fn dune_vm_lookup(
         let pdep = alloc_page()
             .map_or(Err(-libc::ENOMEM), |addr|{
                 let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-                pdpte[j].set_addr(addr, flags);
+                pdpte.set_addr(addr, flags);
                 // VA == PA
                 Ok(addr.as_u64() as *mut PageTable)
             })?;
@@ -268,15 +270,16 @@ pub fn dune_vm_lookup(
             ptr::write_bytes(pdep, 0, PGSIZE as usize);
             &mut *pdep
         }
-    } else if pte_big1gb(&pdpte[j]) {
-        return Ok(&mut pdpte[j]);
+    } else if pte_big1gb(pdpte) {
+        return Ok(pdpte);
     } else {
         // VA == PA
-        unsafe { &mut *(pdpte[j].addr().as_u64() as *mut PageTable) }
+        unsafe { &mut *(pdpte.addr().as_u64() as *mut PageTable) }
     };
 
 
-    let pte = if !pte_present(&pde[k]) {
+    let pde = &mut pd[k];
+    let pte = if !pte_present(pde) {
         if create == CreateType::None {
             return Err(-libc::ENOENT);
         }
@@ -284,7 +287,7 @@ pub fn dune_vm_lookup(
         let ptep = alloc_page()
             .map_or(Err(-libc::ENOMEM), |addr|{
                 let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-                pde[k].set_addr(addr, flags);
+                pde.set_addr(addr, flags);
                 Ok(addr.as_u64() as *mut PageTable)
             })?;
 
@@ -292,11 +295,11 @@ pub fn dune_vm_lookup(
             ptr::write_bytes(ptep, 0, PGSIZE as usize);
             &mut *(ptep)
         }
-    } else if pte_big(&pde[k]) {
-        return Ok(&mut pde[k]);
+    } else if pte_big(&pde) {
+        return Ok(pde);
     } else {
         // VA == PA
-        unsafe { &mut *(pde[k].addr().as_u64() as *mut PageTable) }
+        unsafe { &mut *(pde.addr().as_u64() as *mut PageTable) }
     };
 
     Ok(&mut pte[l])
