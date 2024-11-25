@@ -51,6 +51,30 @@ impl From<CreateType> for i32 {
     }
 }
 
+#[repr(C)]
+#[derive(Debug,Clone,PartialEq,Eq)]
+struct MapPhysData {
+    perm: PageTableFlags,
+    va_base: VirtAddr,
+    pa_base: PhysAddr,
+}
+
+impl MapPhysData {
+    funcs!(perm, PageTableFlags);
+    funcs!(va_base, VirtAddr);
+    funcs!(pa_base, PhysAddr);
+}
+
+impl default::Default for MapPhysData {
+    fn default() -> Self {
+        MapPhysData {
+            perm: PageTableFlags::empty(),
+            va_base: VirtAddr::zero(),
+            pa_base: PhysAddr::zero(),
+        }
+    }
+}
+
 pub type PageWalkCb = fn(arg: *const c_void, pte: &mut PageTableEntry, va: VirtAddr) -> i32;
 
 fn pte_present(pte: &PageTableEntry) -> bool {
@@ -123,7 +147,6 @@ fn __dune_vm_page_walk<PageWalkCb>(
 where
     PageWalkCb: Fn(*const c_void, &mut PageTableEntry, VirtAddr) -> Result<(), i32>
 {
-
     let start_idx = start_va.page_table_index(level);
     let end_idx = end_va.page_table_index(level);
     let base_va = start_va.align_down(level.table_address_space_alignment());
@@ -328,30 +351,6 @@ pub fn dune_vm_map_phys(
         PageTableLevel::Four,
         create,
     )
-}
-
-#[repr(C)]
-#[derive(Debug,Clone,PartialEq,Eq)]
-struct MapPhysData {
-    perm: PageTableFlags,
-    va_base: VirtAddr,
-    pa_base: PhysAddr,
-}
-
-impl MapPhysData {
-    funcs!(perm, PageTableFlags);
-    funcs!(va_base, VirtAddr);
-    funcs!(pa_base, PhysAddr);
-}
-
-impl default::Default for MapPhysData {
-    fn default() -> Self {
-        MapPhysData {
-            perm: PageTableFlags::empty(),
-            va_base: VirtAddr::zero(),
-            pa_base: PhysAddr::zero(),
-        }
-    }
 }
 
 fn __dune_vm_map_phys_helper(arg: *const c_void, pte: &mut PageTableEntry, va: VirtAddr) -> Result<(), i32> {

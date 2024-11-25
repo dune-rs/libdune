@@ -1,31 +1,38 @@
 // #[macro_use]
-use std::os::raw::c_void;
+use std::{ops::Deref, os::raw::c_void};
 use std::mem;
 use libc::ioctl;
+use lazy_static::lazy_static;
 use dune_sys::*;
 
 use crate::globals::*;
-use crate::core::dune::*;
 
-static mut TRAP_REGS: DuneTrapRegs = DuneTrapRegs::default();
+use super::{__dune_go_dune, __dune_go_linux, DUNE_FD};
+
+lazy_static! {
+    pub static ref TRAP_REGS: DuneTrapRegs = DuneTrapRegs::default();
+}
 
 unsafe extern "C" fn dune_trap_enable(trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void) {
-    let trap_conf = DuneTrapConfig::default();
+    let mut trap_conf = DuneTrapConfig::default();
     trap_conf.set_trigger_rip(trigger_rip)
             .set_delay(delay)
             .set_notify_func(func)
-            .set_regs(&mut TRAP_REGS)
-            .set_regs_size(mem::size_of::<DuneTrapRegs>())
+            .set_regs(TRAP_REGS.deref() as *const DuneTrapRegs as *mut DuneTrapRegs)
+            .set_regs_size(mem::size_of::<DuneTrapRegs>() as u64)
             .set_priv_data(priv_data);
 
-    { ioctl(DUNE_FD, DUNE_TRAP_ENABLE, &trap_conf); }
+    let dune_fd = *DUNE_FD.lock().unwrap();
+    ioctl(dune_fd, DUNE_TRAP_ENABLE, &trap_conf);
 }
 
 fn dune_trap_disable() {
-    unsafe { ioctl(DUNE_FD, DUNE_TRAP_DISABLE); }
+    let dune_fd = *DUNE_FD.lock().unwrap();
+    unsafe { ioctl(dune_fd, DUNE_TRAP_DISABLE) };
 }
 
-fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) -> ! {
+#[no_mangle]
+extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) -> ! {
     unsafe {
         let dune_conf = &mut *(priv_data as *mut DuneConfig);
 
@@ -41,7 +48,8 @@ fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) -> ! {
         dune_conf.set_rflags(dune_conf.rflags() | (*regs).rflags() & X86_EFLAGS_TF);
 
         // Continue in Dune mode.
-        __dune_go_dune(DUNE_FD, dune_conf);
+        let dune_fd = *DUNE_FD.lock().unwrap();
+        __dune_go_dune(dune_fd, dune_conf);
         // It doesn't return.
     }
 }

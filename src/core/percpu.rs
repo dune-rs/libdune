@@ -232,7 +232,8 @@ pub unsafe fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
     // NOTE: We don't setup the general purpose registers because __dune_ret
     // will restore them as they were before the __dune_enter call
 
-    let ret = __dune_enter(DUNE_FD, &conf);
+    let dune_fd = *DUNE_FD.lock().unwrap();
+    let ret = __dune_enter(dune_fd, &conf);
     if ret != 0 {
         println!("dune: entry to Dune mode failed, ret is {}", ret);
         return Err(io::Error::new(ErrorKind::Other, "Entry to Dune mode failed"));

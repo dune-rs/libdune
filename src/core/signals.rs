@@ -8,11 +8,12 @@ pub fn setup_signals() -> io::Result<()> {
     for i in 1..32 {
         match i {
             SIGTSTP | SIGSTOP | SIGKILL | SIGCHLD | SIGINT | SIGTERM => continue,
-            _ => {
-                let mut sa: sigaction = unsafe { mem::zeroed() };
+            _ => unsafe {
+                let mut sa: sigaction = mem::zeroed();
                 sa.sa_sigaction = SIG_IGN;
-                if unsafe { sigaction(i, &sa, ptr::null_mut()) } == -1 {
-                    unsafe { libc::close(DUNE_FD) };
+                if sigaction(i, &sa, ptr::null_mut()) == -1 {
+                    let dune_fd = *DUNE_FD.lock().unwrap();
+                    libc::close(dune_fd);
                     return Err(io::Error::new(ErrorKind::Other, format!("sigaction() {}", i)));
                 }
             }

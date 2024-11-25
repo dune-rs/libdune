@@ -1,6 +1,5 @@
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
 use std::env;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Once;
 use chrono::Local;

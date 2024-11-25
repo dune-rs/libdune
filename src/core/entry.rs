@@ -4,11 +4,12 @@ use std::sync::Mutex;
 use dune_sys::{DuneConfig, DuneDevice, DuneRetCode};
 use libc::{open, O_RDWR};
 use x86_64::structures::paging::PageTable;
-use x86_64::{PhysAddr, VirtAddr};
 use lazy_static::lazy_static;
 use crate::{core::*, dune_page_init};
 
 use std::cell::RefCell;
+
+use core::arch::global_asm;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -25,19 +26,43 @@ extern "C" {
     pub static __dune_vsyscall_page: u8;
 }
 
+global_asm!(
+    include_str!("dune.S"),
+    IOCTL_DUNE_ENTER = const 0x80b0e901,
+    DUNE_CFG_RET = const offset_of!(DuneConfig, ret),
+    DUNE_CFG_RAX = const offset_of!(DuneConfig, rax),
+    DUNE_CFG_RBX = const offset_of!(DuneConfig, rbx),
+    DUNE_CFG_RCX = const offset_of!(DuneConfig, rcx),
+    DUNE_CFG_RDX = const offset_of!(DuneConfig, rdx),
+    DUNE_CFG_RSI = const offset_of!(DuneConfig, rsi),
+    DUNE_CFG_RDI = const offset_of!(DuneConfig, rdi),
+    DUNE_CFG_RSP = const offset_of!(DuneConfig, rsp),
+    DUNE_CFG_RBP = const offset_of!(DuneConfig, rbp),
+    DUNE_CFG_R8 = const offset_of!(DuneConfig, r8),
+    DUNE_CFG_R9 = const offset_of!(DuneConfig, r9),
+    DUNE_CFG_R10 = const offset_of!(DuneConfig, r10),
+    DUNE_CFG_R11 = const offset_of!(DuneConfig, r11),
+    DUNE_CFG_R12 = const offset_of!(DuneConfig, r12),
+    DUNE_CFG_R13 = const offset_of!(DuneConfig, r13),
+    DUNE_CFG_R14 = const offset_of!(DuneConfig, r14),
+    DUNE_CFG_R15 = const offset_of!(DuneConfig, r15),
+    DUNE_CFG_RIP = const offset_of!(DuneConfig, rip),
+    DUNE_CFG_RFLAGS = const offset_of!(DuneConfig, rflags),
+    DUNE_CFG_CR3 = const offset_of!(DuneConfig, cr3),
+    DUNE_CFG_STATUS = const offset_of!(DuneConfig, status),
+    DUNE_CFG_VCPU = const offset_of!(DuneConfig, vcpu),
+    DUNE_RET_NOENTER = const DuneRetCode::NoEnter as i32,
+);
+
 thread_local! {
     static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
 lazy_static! {
     pub static ref PGROOT: Mutex<PageTable> = Mutex::new(PageTable::new());
+    pub static ref DUNE_FD: Mutex<i32> = Mutex::new(0);
 }
 
-// pub static mut PGROOT: *mut PageTable = ptr::null_mut();
-pub static mut PHYS_LIMIT: PhysAddr = PhysAddr::new(0);
-pub static mut MMAP_BASE: VirtAddr = VirtAddr::new(0);
-pub static mut STACK_BASE: VirtAddr = VirtAddr::new(0);
-pub static mut DUNE_FD: i32 = -1;
 pub static mut DUNE_DEVICE: Option<DuneDevice> = None;
 
 /**
@@ -98,8 +123,9 @@ enum DuneError {
   */
 #[no_mangle]
 pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
-    DUNE_FD = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
-    if DUNE_FD <= 0 {
+    let dune_fd = &mut *DUNE_FD.lock().unwrap();
+    *dune_fd = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
+    if *dune_fd <= 0 {
         return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
     }
 
@@ -169,7 +195,8 @@ pub unsafe extern "C" fn on_dune_exit(conf_: *mut DuneConfig) -> ! {
             println!("dune: exit due to interrupt {}", conf.status());
         },
         DuneRetCode::Signal => {
-            __dune_go_dune(DUNE_FD, conf_);
+            let dune_fd = *DUNE_FD.lock().unwrap();
+            __dune_go_dune(dune_fd, conf_);
         },
         DuneRetCode::UnhandledVmexit => {
             println!("dune: exit due to unhandled VM exit");

@@ -172,7 +172,7 @@ impl From<String> for DuneProcmapEntry {
 
 pub fn dune_procmap_iterate<F>(mut cb: F) -> io::Result<()>
 where
-    F: FnMut(&DuneProcmapEntry),
+    F: FnMut(&DuneProcmapEntry) -> Result<(), i32>,
 {
     let file = File::open("/proc/self/maps")?;
     let reader = io::BufReader::new(file);
@@ -186,8 +186,9 @@ where
     Ok(())
 }
 
-fn dune_procmap_dump_helper(e: &DuneProcmapEntry) {
+fn dune_procmap_dump_helper(e: &DuneProcmapEntry) -> Result<(), i32> {
     println!("{}", e);
+    Ok(())
 }
 
 pub fn dune_procmap_dump() -> io::Result<()> {
