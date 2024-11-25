@@ -1,15 +1,13 @@
 use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
 use std::sync::Mutex;
-use dune_sys::{DuneConfig, DuneDevice, DuneRetCode};
+use std::cell::RefCell;
 use libc::{open, O_RDWR};
 use x86_64::structures::paging::PageTable;
 use lazy_static::lazy_static;
-use crate::{core::*, dune_page_init};
-
-use std::cell::RefCell;
-
 use core::arch::global_asm;
+use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, *};
+use crate::{core::*, dune_page_init};
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -23,35 +21,35 @@ extern "C" {
     pub fn __dune_go_linux(conf: *mut DuneConfig);
 
     // assembly routine for handling vsyscalls
-    pub static __dune_vsyscall_page: u8;
+    pub static __dune_vsyscall_page: u64;
 }
 
 global_asm!(
     include_str!("dune.S"),
-    IOCTL_DUNE_ENTER = const 0x80b0e901,
-    DUNE_CFG_RET = const offset_of!(DuneConfig, ret),
-    DUNE_CFG_RAX = const offset_of!(DuneConfig, rax),
-    DUNE_CFG_RBX = const offset_of!(DuneConfig, rbx),
-    DUNE_CFG_RCX = const offset_of!(DuneConfig, rcx),
-    DUNE_CFG_RDX = const offset_of!(DuneConfig, rdx),
-    DUNE_CFG_RSI = const offset_of!(DuneConfig, rsi),
-    DUNE_CFG_RDI = const offset_of!(DuneConfig, rdi),
-    DUNE_CFG_RSP = const offset_of!(DuneConfig, rsp),
-    DUNE_CFG_RBP = const offset_of!(DuneConfig, rbp),
-    DUNE_CFG_R8 = const offset_of!(DuneConfig, r8),
-    DUNE_CFG_R9 = const offset_of!(DuneConfig, r9),
-    DUNE_CFG_R10 = const offset_of!(DuneConfig, r10),
-    DUNE_CFG_R11 = const offset_of!(DuneConfig, r11),
-    DUNE_CFG_R12 = const offset_of!(DuneConfig, r12),
-    DUNE_CFG_R13 = const offset_of!(DuneConfig, r13),
-    DUNE_CFG_R14 = const offset_of!(DuneConfig, r14),
-    DUNE_CFG_R15 = const offset_of!(DuneConfig, r15),
-    DUNE_CFG_RIP = const offset_of!(DuneConfig, rip),
-    DUNE_CFG_RFLAGS = const offset_of!(DuneConfig, rflags),
-    DUNE_CFG_CR3 = const offset_of!(DuneConfig, cr3),
-    DUNE_CFG_STATUS = const offset_of!(DuneConfig, status),
-    DUNE_CFG_VCPU = const offset_of!(DuneConfig, vcpu),
-    DUNE_RET_NOENTER = const DuneRetCode::NoEnter as i32,
+    IOCTL_DUNE_ENTER = const IOCTL_DUNE_ENTER,
+    DUNE_CFG_RET = const DUNE_CFG_RET,
+    DUNE_CFG_RAX = const DUNE_CFG_RAX,
+    DUNE_CFG_RBX = const DUNE_CFG_RBX,
+    DUNE_CFG_RCX = const DUNE_CFG_RCX,
+    DUNE_CFG_RDX = const DUNE_CFG_RDX,
+    DUNE_CFG_RSI = const DUNE_CFG_RSI,
+    DUNE_CFG_RDI = const DUNE_CFG_RDI,
+    DUNE_CFG_RSP = const DUNE_CFG_RSP,
+    DUNE_CFG_RBP = const DUNE_CFG_RBP,
+    DUNE_CFG_R8 = const DUNE_CFG_R8,
+    DUNE_CFG_R9 = const DUNE_CFG_R9,
+    DUNE_CFG_R10 = const DUNE_CFG_R10,
+    DUNE_CFG_R11 = const DUNE_CFG_R11,
+    DUNE_CFG_R12 = const DUNE_CFG_R12,
+    DUNE_CFG_R13 = const DUNE_CFG_R13,
+    DUNE_CFG_R14 = const DUNE_CFG_R14,
+    DUNE_CFG_R15 = const DUNE_CFG_R15,
+    DUNE_CFG_RIP = const DUNE_CFG_RIP,
+    DUNE_CFG_RFLAGS = const DUNE_CFG_RFLAGS,
+    DUNE_CFG_CR3 = const DUNE_CFG_CR3,
+    DUNE_CFG_STATUS = const DUNE_CFG_STATUS,
+    DUNE_CFG_VCPU = const DUNE_CFG_VCPU,
+    DUNE_RET_NOENTER = const DUNE_RET_NOENTER,
 );
 
 thread_local! {

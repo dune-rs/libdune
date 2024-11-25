@@ -129,6 +129,9 @@ pub fn dune_page_stats() {
 
 pub fn dune_pa2page(pa: PhysAddr) -> *mut Page {
     unsafe {
+        if pa < PAGEBASE {
+            return ptr::null_mut();
+        }
         let offset = pa - PAGEBASE;
         let pgoff = offset as usize / PGSIZE;
         PAGES.add(pgoff)
@@ -137,6 +140,9 @@ pub fn dune_pa2page(pa: PhysAddr) -> *mut Page {
 
 pub fn dune_page2pa(pg: *mut Page) -> PhysAddr {
     unsafe {
+        if pg < PAGES || pg >= PAGES.add(NUM_PAGES) {
+            return PhysAddr::new(0);
+        }
         let pgoff = pg.offset_from(PAGES) as usize;
         PAGEBASE + (pgoff * PGSIZE) as u64
     }
@@ -157,10 +163,11 @@ pub fn dune_page_get(pg: *mut Page) -> *mut Page {
     }
 }
 
-pub fn dune_page_put(pg: *mut Page) {
+pub fn dune_page_put(pg: *mut Page) -> Result<(), ()>{
     unsafe {
-        assert!(pg >= PAGES);
-        assert!(pg < PAGES.add(NUM_PAGES));
+        if pg < PAGES || pg >= PAGES.add(NUM_PAGES) {
+            return Err(());
+        }
 
         (*pg).ref_count -= 1;
 
@@ -168,6 +175,7 @@ pub fn dune_page_put(pg: *mut Page) {
             dune_page_free(pg);
         }
     }
+    Ok(())
 }
 
 pub fn dune_page_init() -> Result<(), i32> {

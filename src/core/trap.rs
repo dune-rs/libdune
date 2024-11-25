@@ -18,9 +18,9 @@ pub const IDT_ENTRIES: usize = 256;
 pub const DUNE_SIGNAL_INTR_BASE: usize = 32;
 pub const STACK_DEPTH: u64 = 12;
 
-pub type DuneSyscallCb = fn(&mut DuneTf);
-pub type DunePgfltCb = fn(u64, u64, &mut DuneTf);
-pub type DuneIntrCb = fn(&mut DuneTf);
+pub type DuneSyscallCb = extern "C" fn(&mut DuneTf);
+pub type DunePgfltCb = extern "C" fn(u64, u64, &mut DuneTf);
+pub type DuneIntrCb = extern "C" fn(&mut DuneTf);
 
 static SYSCALL_CB: AtomicPtr<DuneSyscallCb> = AtomicPtr::new(ptr::null_mut());
 static PGFLT_CB: AtomicPtr<DunePgfltCb> = AtomicPtr::new(ptr::null_mut());
@@ -80,7 +80,9 @@ unsafe extern "C" fn dune_dump_stack(tf: &DuneTf) {
             dune_printf("dune: reached unmapped addr");
             break;
         }
-        dune_printf("dune: RSP{:+-3} 0x{:016x}", i * std::mem::size_of::<u64>(), unsafe { sp + i});
+        let offset = i * std::mem::size_of::<u64>() as u64;
+        let addr: *const u64 = (va_start + offset).as_ptr();
+        dune_printf("dune: RSP{:+-3} 0x{:016x}", offset, unsafe { *addr });
     }
 }
 

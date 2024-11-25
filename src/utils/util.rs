@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
-use std::str;
-use libc::SIG_ERR;
+use std::{ptr, str};
+use libc::{sighandler_t, SIG_ERR};
 use libc::strlen;
 use libc::signal;
 use std::arch::asm;
@@ -9,7 +9,7 @@ use dune_sys::DuneTf;
 
 use crate::core::*;
 
-type SigHandler = fn(c_int);
+type SigHandler = extern "C" fn(c_int);
 
 #[inline(always)]
 unsafe fn dune_puts(buf: *const c_char) -> i64 {
@@ -28,14 +28,25 @@ unsafe fn dune_puts(buf: *const c_char) -> i64 {
     ret
 }
 
+/**
+ * dune_printf - a raw low-level printf request that uses a hypercall directly
+ * 
+ * This is intended for working around libc syscall issues.
+ */
 #[no_mangle]
 pub unsafe extern "C" fn dune_printf(fmt: &str, args: ...) -> i64 {
-    let cstr = CString::new(fmt).unwrap();
-    let ret = dune_puts(cstr.as_ptr());
-    ret
+    let mut buf = [0u8; 1024];
+    let fmt = CString::new(fmt).unwrap();
+    let fmt = fmt.as_ptr();
+    let len = libc::snprintf(buf.as_mut_ptr() as *mut c_char, buf.len(), fmt, args);
+    if len < 0 {
+        return -1;
+    }
+    dune_puts(buf.as_ptr() as *const c_char)
 }
 
-pub unsafe fn dune_mmap(
+#[no_mangle]
+pub unsafe extern "C" fn dune_mmap(
     addr: *mut c_void,
     length: usize,
     prot: c_int,
@@ -65,7 +76,8 @@ pub unsafe fn dune_mmap(
     ret_addr
 }
 
-pub unsafe fn dune_die() {
+#[no_mangle]
+pub unsafe extern "C" fn dune_die() {
     asm!(
         "movq $60, %rax", // exit
         "vmcall",
@@ -73,7 +85,8 @@ pub unsafe fn dune_die() {
     );
 }
 
-pub unsafe fn dune_passthrough_syscall(tf: &mut DuneTf) {
+#[no_mangle]
+pub unsafe extern "C" fn dune_passthrough_syscall(tf: &mut DuneTf) {
     let mut rax = tf.rax();
     asm!(
         "movq {0}, %rdi",
@@ -95,12 +108,16 @@ pub unsafe fn dune_passthrough_syscall(tf: &mut DuneTf) {
     tf.set_rax(rax);
 }
 
-pub unsafe fn dune_signal(sig: c_int, cb: SigHandler) -> SigHandler {
-    let x = cb as DuneIntrCb; // XXX
-    let old_handler = signal(sig, cb);
-    if old_handler == SIG_ERR {
-        return SIG_ERR;
+#[no_mangle]
+pub unsafe extern "C" fn dune_signal(sig: c_int, cb: *const SigHandler) -> *const sighandler_t {
+    let x: *const DuneIntrCb = cb as *const DuneIntrCb;
+
+    let ret = signal(sig, cb as sighandler_t);
+    if ret == SIG_ERR {
+        return SIG_ERR as *const sighandler_t;
     }
-    dune_register_intr_handler(DUNE_SIGNAL_INTR_BASE + sig as usize, x);
-    old_handler
+
+    dune_register_intr_handler(DUNE_SIGNAL_INTR_BASE + sig as usize, *x);
+
+    ptr::null_mut() as *const sighandler_t
 }

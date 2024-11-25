@@ -1,17 +1,21 @@
 #![feature(thread_local)]
 #![feature(ptr_mask)]
+#![feature(c_variadic)]
 #![allow(unused_macros)]
+#![allow(unused_variables)]
 #[macro_use]
 pub mod globals;
 pub mod core;
 pub mod mm;
 pub mod fpu;
+#[cfg(feature = "syscall")]
 pub mod syscall;
 pub mod utils;
 
 pub use crate::core::*;
 pub use crate::mm::*;
 pub use crate::fpu::*;
+#[cfg(feature = "syscall")]
 pub use crate::syscall::*;
 pub use crate::utils::*;
 

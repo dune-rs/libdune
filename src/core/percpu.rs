@@ -38,8 +38,6 @@ struct Tss {
     tss_iopb: [u8; 0],
 }
 
-
-
 impl Tss {
 
     funcs!(tss_iomb, u16);
@@ -150,8 +148,12 @@ impl DunePercpu {
      */
     fn dune_boot(&self) {
         let mut gdtr = Tptr::default();
-        gdtr.set_base(self.gdt.as_ptr() as u64)
-            .set_limit((self.gdt.len() * mem::size_of::<u64>() - 1) as u16);
+        let gdt_ptr = std::ptr::addr_of!(self.gdt);
+        unsafe {
+            let size = (*gdt_ptr).len() * mem::size_of::<u64>() - 1;
+            gdtr.set_base(gdt_ptr as u64)
+                .set_limit(size as u16);
+        }
 
         let idt = IDT.lock().unwrap();
         let mut idtr = Tptr::default();

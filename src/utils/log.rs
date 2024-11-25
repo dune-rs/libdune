@@ -12,7 +12,8 @@ struct SimpleLogger;
 
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= LOG_LEVEL.load(Ordering::Relaxed) as Level
+        let level: usize = metadata.level() as usize;
+        level <= LOG_LEVEL.load(Ordering::Relaxed)
     }
 
     fn log(&self, record: &Record) {
