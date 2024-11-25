@@ -31,29 +31,52 @@ static mut STACK_BASE: VirtAddr = VirtAddr::new(0);
 ///  ptr - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
 ///
 fn dune_mmap_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
-    unsafe {
-        PhysAddr::new(ptr.as_u64() - MMAP_BASE.as_u64() + PHYS_LIMIT.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE)
+    match LAYOUT.lock().and_then(|a|{
+        let layout = &*a;
+        let base_map = layout.base_map();
+        let base_stack = layout.base_stack();
+        let phys_limit = layout.phys_limit();
+        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
+        Ok(PhysAddr::new(addr))
+    }) {
+        Ok(pa) => pa,
+        Err(_) => PhysAddr::new(0),
     }
 }
 
 /// The physical address limit of the address space
 /// ptr - STACK_BASE + PHYS_LIMIT - GPA_STACK_SIZE
 fn dune_stack_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
-    unsafe {
-        PhysAddr::new(ptr.as_u64() - STACK_BASE.as_u64() + PHYS_LIMIT.as_u64() - GPA_STACK_SIZE)
+    match LAYOUT.lock().and_then(|a|{
+        let layout = &*a;
+        let base_stack = layout.base_stack();
+        let phys_limit = layout.phys_limit();
+        let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
+        Ok(PhysAddr::new(addr))
+    }) {
+        Ok(pa) => pa,
+        Err(_) => PhysAddr::new(0),
     }
 }
 
 fn dune_va_to_pa(ptr: VirtAddr) -> PhysAddr {
-    unsafe {
-        if ptr >= STACK_BASE {
-            dune_stack_addr_to_pa(ptr)
-        } else if ptr >= MMAP_BASE {
-            dune_mmap_addr_to_pa(ptr)
+    match LAYOUT.lock().and_then(|a|{
+        let layout = &*a;
+        let base_map = layout.base_map();
+        let base_stack = layout.base_stack();
+        let phys_limit = layout.phys_limit();
+        if ptr >= base_stack {
+            let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
+            Ok(PhysAddr::new(addr))
+        } else if ptr >= base_map {
+            let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
+            Ok(PhysAddr::new(addr))
         } else {
-            // PA == VA
-            PhysAddr::new(ptr.as_u64())
+            Ok(PhysAddr::new(ptr.as_u64()))
         }
+    }) {
+        Ok(pa) => pa,
+        Err(_) => PhysAddr::new(0),
     }
 }
 
@@ -278,21 +301,18 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
 }
 
 pub fn setup_mappings(full: bool) -> Result<()> {
-    let mut layout: DuneLayout = unsafe { mem::zeroed() };
+    let layout = &mut DuneLayout::default() as *mut DuneLayout;
     let dune_fd = *DUNE_FD.lock().unwrap();
-    let ret = unsafe { ioctl(dune_fd, DUNE_GET_LAYOUT, &mut layout) };
+    let ret = unsafe { ioctl(dune_fd, DUNE_GET_LAYOUT, layout) };
     if ret != 0 {
         return Err(Error::Unknown);
     }
 
-    unsafe {
-        PHYS_LIMIT = layout.phys_limit();
-        MMAP_BASE = layout.base_map();
-        STACK_BASE = layout.base_stack();
-    }
+    let _layout = &mut *LAYOUT.lock().unwrap();
+    *_layout = unsafe { *layout };
 
     if full {
-        __setup_mappings_full(&layout)
+        __setup_mappings_full(_layout)
     } else {
         __setup_mappings_precise()
     }
