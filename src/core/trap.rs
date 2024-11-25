@@ -2,6 +2,7 @@
  * trap.c - x86 fault handling
  */
 use dune_sys::trap::DuneTf;
+use x86_64::VirtAddr;
 use crate::core::*;
 use crate::mm::*;
 use crate::utils::*;
@@ -10,13 +11,12 @@ use crate::globals::*;
 use std::arch::asm;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicPtr;
-use x86_64::structures::paging::page_table::{PageTableEntry, PageTableFlags};
+use x86_64::structures::paging::page_table::PageTableFlags;
 use std::ptr;
-use libc::c_void;
 
 pub const IDT_ENTRIES: usize = 256;
 pub const DUNE_SIGNAL_INTR_BASE: usize = 32;
-pub const STACK_DEPTH: usize = 12;
+pub const STACK_DEPTH: u64 = 12;
 
 pub type DuneSyscallCb = fn(&mut DuneTf);
 pub type DunePgfltCb = fn(u64, u64, &mut DuneTf);
@@ -55,30 +55,32 @@ pub fn dune_register_pgflt_handler(cb: DunePgfltCb) {
     PGFLT_CB.store(Box::into_raw(Box::new(cb)), Ordering::SeqCst);
 }
 
-unsafe fn addr_is_mapped(va: *const u8) -> bool {
-    let va_start = va as *const c_void;
-    let mut ptep: *mut PageTableEntry = ptr::null_mut();
-    let ret = dune_vm_lookup(PGROOT, va_start, CreateType::None, &mut ptep);
-    if ret != 0 {
-        return false;
+unsafe fn addr_is_mapped(va_start: VirtAddr) -> bool {
+    let mut ret = dune_vm_lookup(PGROOT, va_start, CreateType::None);
+    match ret {
+        Ok(pte) => {
+            if pte.flags().contains(PageTableFlags::PRESENT) {
+                return true;
+            }
+            return false;
+        }
+        Err(_) => {
+            return false;
+        }
     }
-    let pte: &PageTableEntry = unsafe { &*ptep };
-    if pte.flags().contains(PageTableFlags::PRESENT) {
-        return false;
-    }
-    true
 }
 
 #[no_mangle]
 unsafe extern "C" fn dune_dump_stack(tf: &DuneTf) {
-    let sp = tf.rsp() as *const u64;
+    let sp = tf.rsp() ;
+    let va_start = VirtAddr::new(sp);
     dune_printf("dune: Dumping Stack Contents...");
     for i in 0..STACK_DEPTH {
-        if !addr_is_mapped(unsafe { sp.add(i) } as *const u8) {
+        if !addr_is_mapped(va_start) {
             dune_printf("dune: reached unmapped addr");
             break;
         }
-        dune_printf("dune: RSP{:+-3} 0x{:016x}", i * std::mem::size_of::<u64>(), unsafe { *sp.add(i) });
+        dune_printf("dune: RSP{:+-3} 0x{:016x}", i * std::mem::size_of::<u64>(), unsafe { sp + i});
     }
 }
 

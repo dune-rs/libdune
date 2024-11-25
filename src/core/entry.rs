@@ -1,11 +1,11 @@
 use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
 use std::ptr;
-use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, UintptrT};
+use dune_sys::{DuneConfig, DuneDevice, DuneRetCode};
 use libc::{open, O_RDWR};
-use x86_64::structures::paging::page_table::PageTableEntry;
+use x86_64::structures::paging::PageTable;
+use x86_64::{PhysAddr, VirtAddr};
 
-use crate::globals::*;
 use crate::mm::*;
 use crate::core::*;
 
@@ -30,10 +30,11 @@ thread_local! {
     static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
-pub static mut PGROOT: *mut PageTableEntry = ptr::null_mut();
-pub static mut PHYS_LIMIT: UintptrT = ptr::null_mut();
-pub static mut MMAP_BASE: UintptrT = ptr::null_mut();
-pub static mut STACK_BASE: UintptrT = ptr::null_mut();
+// PageTable root
+pub static mut PGROOT: *mut PageTable = ptr::null_mut();
+pub static mut PHYS_LIMIT: PhysAddr = PhysAddr::new(0);
+pub static mut MMAP_BASE: VirtAddr = VirtAddr::new(0);
+pub static mut STACK_BASE: VirtAddr = VirtAddr::new(0);
 pub static mut DUNE_FD: i32 = -1;
 pub static mut DUNE_DEVICE: Option<DuneDevice> = None;
 
@@ -95,7 +96,7 @@ pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
         return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
     }
 
-    PGROOT = unsafe { libc::memalign(PGSIZE, PGSIZE) as *mut PageTableEntry };
+    PGROOT = unsafe { libc::memalign(PGSIZE, PGSIZE) as *mut PageTable };
     if PGROOT.is_null() {
         unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Failed to allocate pgroot"));

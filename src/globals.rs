@@ -1,12 +1,9 @@
 use std::arch::asm;
 use libc::c_void;
-use x86_64::structures::paging::page_table::PageTableEntry;
 
 pub const NPTBITS: i32 = 9; // log2(NPageTableEntryRIES)
 pub const NPTLVLS: usize = 3; // page table depth -1
 pub const PD_SKIP: usize = 6; // Offset of pd_lim in Pseudodesc
-
-// pub const LGPGSIZE: usize = 1 << (PGSHIFT + NPTBITS);
 
 pub const CR3_NOFLUSH: u64 = 1 << 63;
 
@@ -36,7 +33,7 @@ pub const IDT_ENTRIES: usize = 256;
  *   n = 2 => page directory pointer
  *   n = 3 => page map level 4
  */
-pub const PDXMASK: usize = (1 << NPTBITS) - 1;
+pub const PDXMASK: u64 = (1 << NPTBITS) - 1;
 
 macro_rules! PDSHIFT {
     ($n:expr) => {
@@ -51,34 +48,6 @@ macro_rules! PDX {
 }
 
 pub const NPAGE_TABLE_ENTRY_RIES: usize = 1 << NPTBITS;
-
-/* page number field of address */
-#[allow(unused_macros)]
-macro_rules! PPN {
-    ($la:expr) => {
-        ($la >> PGSHIFT)
-    };
-}
-
-/* page size */
-pub const PGSHIFT: usize = 12; /* log2(PGSIZE) */
-pub const PGSIZE: usize = 1 << PGSHIFT; /* bytes mapped by a page */
-pub const PGMASK: usize = PGSIZE - 1;
-
-/* offset in page */
-#[allow(unused_macros)]
-macro_rules! PGOFF {
-    ($la:expr) => {
-        ($la & PGMASK)
-    };
-}
-
-#[allow(unused_macros)]
-macro_rules! PGADDR {
-    ($la:expr) => {
-        ($la & !PGMASK)
-    };
-}
 
 /* big page size */
 pub const BIG_PGSHIFT: usize = 21;
@@ -121,21 +90,6 @@ pub const PTE_COW: u64 = 0x0200; /* Copy-on-write - must also be read-only */
 pub const PTE_USR1: u64 = 0x4000000000000000; /* Reserved for user software */
 pub const PTE_USR2: u64 = 0x2000000000000000; /* Reserved for user software */
 pub const PTE_USR3: u64 = 0x1000000000000000; /* Reserved for user software */
-
-/* address in page table entry */
-#[allow(unused_macros)]
-macro_rules! PTE_ADDR {
-    ($pte:expr) => {
-        ($pte & 0xffffffffff000) as u64
-    };
-}
-
-#[allow(unused_macros)]
-macro_rules! PTE_FLAGS {
-    ($pte:expr) => {
-        ($pte & 0xfff0000000000fff) as u64
-    };
-}
 
 /* Control Register flags */
 pub const CR0_PE: u64 = 0x1; /* Protected mode enable */
@@ -265,7 +219,11 @@ pub const SEG_CG: u64 = 0xc << 40; /* 64-bit Call Gate */
 pub const SEG_IG: u64 = 0xe << 40; /* 64-bit Interrupt Gate */
 pub const SEG_TG: u64 = 0xf << 40; /* 64-bit Trap Gate */
 
-pub const SEG_DPL: fn(u64) -> u64 = |x| (x & 3) << 45; /* Descriptor privilege level */
+macro_rules! SEG_DPL {
+    ($x:expr) => {
+        ($x & 3) << 45
+    };
+}
 pub const SEG_P: u64 = 1 << 47; /* Present */
 pub const SEG_L: u64 = 1 << 53; /* Long mode */
 pub const SEG_D: u64 = 1 << 54; /* 1 = 32-bit in legacy, 0 in long mode */
@@ -306,7 +264,7 @@ macro_rules! SEG32_ASM {
 #[allow(unused_macros)]
 macro_rules! SEG32 {
     ($type:expr, $base:expr, $lim:expr, $dpl:expr) => {
-        ($type | SEG_S | SEG_P | SEG_D | SEG_G | SEG_A | SEG_DPL($dpl) | 
+        ($type | SEG_S | SEG_P | SEG_D | SEG_G | SEG_A | SEG_DPL!($dpl) | 
         SEG_BASELO!($base) | SEG_LIM!($lim >> 12))
     };
 }
@@ -314,7 +272,7 @@ macro_rules! SEG32 {
 #[allow(unused_macros)]
 macro_rules! SEG64 {
     ($type:expr, $dpl:expr) => {
-        ($type | SEG_S | SEG_P | SEG_G | SEG_L | SEG_A | SEG_DPL($dpl) | 
+        ($type | SEG_S | SEG_P | SEG_G | SEG_L | SEG_A | SEG_DPL!($dpl) | 
         SEG_LIM!(0xffffffff))
     };
 }

@@ -23,8 +23,7 @@ unsafe fn dune_puts(buf: *const c_char) -> i64 {
         "movq %rax, {2}",
         in(reg) buf,
         in(reg) strlen(buf),
-        out(reg) ret,
-        out("rax") _, out("rdi") _, out("rsi") _, out("rdx") _,
+        out(reg) ret
     );
     ret
 }
@@ -91,7 +90,7 @@ pub unsafe fn dune_passthrough_syscall(tf: &mut DuneTf) {
         in(reg) tf.rcx(),
         in(reg) tf.r8(),
         in(reg) tf.r9(),
-        out(reg) rax,
+        inout(reg) rax,
     );
     tf.set_rax(rax);
 }

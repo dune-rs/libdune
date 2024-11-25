@@ -7,7 +7,7 @@ use x86_64::registers::model_specific::{FsBase, GsBase};
 use dune_sys::dune::DuneConfig;
 use dune_sys::{funcs, funcs_vec};
 use x86_64::VirtAddr;
-use crate::globals::*;
+use crate::{globals::*, PGSIZE};
 use crate::core::*;
 use super::arch_prctl;
 
@@ -227,7 +227,7 @@ pub unsafe fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
         .set_rflags(0x2);
 
     percpu.setup_gdt();
-    percpu.pre_enter(percpu)?;
+    // percpu.pre_enter(percpu)?;
     // NOTE: We don't setup the general purpose registers because __dune_ret
     // will restore them as they were before the __dune_enter call
 
@@ -237,7 +237,7 @@ pub unsafe fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
         return Err(io::Error::new(ErrorKind::Other, "Entry to Dune mode failed"));
     }
 
-    percpu.post_exit(percpu)?;
+    // percpu.post_exit(percpu)?;
 
     Ok(())
 }

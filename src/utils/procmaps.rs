@@ -4,6 +4,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use dune_sys::funcs;
+use x86_64::VirtAddr;
 // use std::path::Path;
 
 /*
@@ -90,10 +91,10 @@ impl From<String> for ProcMapType {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DuneProcmapEntry {
-    pub begin: u64,
-    pub end: u64,
+    pub begin: VirtAddr,
+    pub end: VirtAddr,
     pub r: bool,
     pub w: bool,
     pub x: bool,
@@ -105,8 +106,8 @@ pub struct DuneProcmapEntry {
 
 impl DuneProcmapEntry {
 
-    funcs!(begin, u64);
-    funcs!(end, u64);
+    funcs!(begin, VirtAddr);
+    funcs!(end, VirtAddr);
     funcs!(r, bool);
     funcs!(w, bool);
     funcs!(x, bool);
@@ -157,7 +158,8 @@ impl From<String> for DuneProcmapEntry {
         let offset = u64::from_str_radix(offset, 16).unwrap();
 
         let entry = DuneProcmapEntry {
-            begin, end,
+            begin: VirtAddr::new(begin),
+            end: VirtAddr::new(end),
             r, w, x, p,
             offset,
             path: path.to_string(),

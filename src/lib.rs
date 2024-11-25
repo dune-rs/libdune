@@ -1,5 +1,6 @@
 #![feature(thread_local)]
 #![feature(ptr_mask)]
+#![allow(unused_macros)]
 #[macro_use]
 pub mod globals;
 pub mod core;

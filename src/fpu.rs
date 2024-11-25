@@ -87,12 +87,6 @@ impl XSaveArea {
             _xsaveopt(self as *mut _ as *mut u8, mask);
         }
     }
-
-    pub fn restore_opt(&self, mask: u64) {
-        unsafe {
-            _xrstoropt(self as *const _ as *const u8, mask);
-        }
-    }
 }
 
 pub fn dune_fpu_init(fp: *mut FxSaveArea) {

@@ -1,5 +1,6 @@
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
 use std::env;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Once;
 use chrono::Local;
@@ -12,7 +13,7 @@ struct SimpleLogger;
 
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= LevelFilter::from_usize(LOG_LEVEL.load(Ordering::Relaxed)).unwrap()
+        metadata.level() <= LOG_LEVEL.load(Ordering::Relaxed) as Level
     }
 
     fn log(&self, record: &Record) {

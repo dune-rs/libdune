@@ -1,16 +1,11 @@
 use std::ptr;
 use std::mem;
-// use std::slice;
-// use std::os::unix::io::AsRawFd;
 use libc::{mmap, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_HUGETLB, PROT_READ, PROT_WRITE};
 use x86_64::PhysAddr;
 use dune_sys::*;
-// use crate::globals::*;
-use crate::globals::*;
-use crate::utils::*;
 
 pub const PAGEBASE: PhysAddr = PhysAddr::new(0x200000000);
-// const PGSIZE: usize = 4096;
+pub const PGSIZE: usize = 4096;
 pub const GROW_SIZE: usize = 512;
 pub const MAX_PAGES: usize = 1 << 20;
 
@@ -84,11 +79,11 @@ fn do_mapping(base: *mut libc::c_void, len: usize) -> Result<*mut libc::c_void, 
 fn grow_size() -> Result<(), i32> {
     unsafe {
         let new_num_pages = NUM_PAGES + GROW_SIZE;
-        let base = (PAGEBASE.as_u64() + NUM_PAGES * PGSIZE) as *mut libc::c_void;
+        let base = (PAGEBASE + (NUM_PAGES * PGSIZE) as u64).as_u64() as *mut libc::c_void;
         do_mapping(base, GROW_SIZE * PGSIZE)?;
 
         for i in NUM_PAGES..new_num_pages {
-            let page = (PAGEBASE.as_u64() + i * PGSIZE) as *mut Page;
+            let page = (PAGEBASE + (i * PGSIZE) as u64).as_u64() as *mut Page;
             ptr::write(page, Page::new());
             PAGES_FREE.push_front(Box::from_raw(page));
         }
@@ -134,18 +129,21 @@ pub fn dune_page_stats() {
 
 pub fn dune_pa2page(pa: PhysAddr) -> *mut Page {
     unsafe {
-        PAGES.add((pa - PAGEBASE.as_u64()) / PGSIZE)
+        let offset = pa - PAGEBASE;
+        let pgoff = offset as usize / PGSIZE;
+        PAGES.add(pgoff)
     }
 }
 
-pub fn dune_page2pa(pg: *mut Page) -> usize {
+pub fn dune_page2pa(pg: *mut Page) -> PhysAddr {
     unsafe {
-        PAGEBASE + (pg.offset_from(PAGES) as usize * PGSIZE)
+        let pgoff = pg.offset_from(PAGES) as usize;
+        PAGEBASE + (pgoff * PGSIZE) as u64
     }
 }
 
 pub fn dune_page_isfrompool(pa: PhysAddr) -> bool {
-    pa >= PAGEBASE && pa < PAGEBASE + unsafe { NUM_PAGES } * PGSIZE
+    pa >= PAGEBASE && pa < PAGEBASE + unsafe { (NUM_PAGES * PGSIZE) as u64 }
 }
 
 pub fn dune_page_get(pg: *mut Page) -> *mut Page {
@@ -183,7 +181,7 @@ pub fn dune_page_init() -> Result<(), i32> {
         }
 
         for i in 0..GROW_SIZE {
-            let page = (PAGEBASE.as_u64() + i * PGSIZE) as *mut Page;
+            let page = (PAGEBASE + (i * PGSIZE) as u64).as_u64() as *mut libc::c_void as *mut Page;
             ptr::write(page, Page::new());
             PAGES_FREE.push_front(Box::from_raw(page));
         }

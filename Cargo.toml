@@ -10,6 +10,7 @@ syscall = []
 debug = []
 apic = []
 elf = []
+dune = []
 
 [build-dependencies]
 cc = "1.0"
