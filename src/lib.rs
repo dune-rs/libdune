@@ -11,6 +11,9 @@ pub mod fpu;
 #[cfg(feature = "syscall")]
 pub mod syscall;
 pub mod utils;
+mod result;
+
+pub use result::{Error, Result};
 
 pub use crate::core::*;
 pub use crate::mm::*;

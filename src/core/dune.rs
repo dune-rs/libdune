@@ -20,6 +20,7 @@ use crate::globals::{rd_rsp, PERM_BIG, PERM_NONE, PERM_R, PERM_U, PERM_W, PERM_X
 use crate::CreateType;
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
 use crate::{core::{PGROOT, *}, dune_vm_map_phys};
+use crate::result::{Result, Error};
 
 // pub static mut PGROOT: *mut PageTable = ptr::null_mut();
 static mut PHYS_LIMIT: PhysAddr = PhysAddr::new(0);
@@ -56,22 +57,22 @@ fn dune_va_to_pa(ptr: VirtAddr) -> PhysAddr {
     }
 }
 
-unsafe fn map_ptr(page: VirtAddr, len: usize) {
+unsafe fn map_ptr(page: VirtAddr, len: usize) -> Result<()> {
     // Align the pointer to the page size
     let page_end = page + len as u64;
     let len = page_end - page;
     let pa = dune_va_to_pa(page);
     let perm = PERM_R | PERM_W;
     let root = &mut *PGROOT.lock().unwrap();
-    dune_vm_map_phys(root, page, len, pa, perm);
+    dune_vm_map_phys(root, page, len, pa, perm)
 }
 
 #[cfg(feature = "dune")]
-pub fn setup_syscall() -> Result<(), i32> {
+pub fn setup_syscall() -> Result<()> {
     let dune_fd = *DUNE_FD.lock().unwrap();
     let lstar = unsafe { ioctl(dune_fd, DUNE_GET_SYSCALL) };
     if lstar == -1 {
-        return Err(-1);
+        return Err(Error::Unknown);
     }
 
     let page = unsafe { mmap(ptr::null_mut(),
@@ -82,7 +83,7 @@ pub fn setup_syscall() -> Result<(), i32> {
                                 0) };
 
     if page == MAP_FAILED {
-        return Err(-1);
+        return Err(Error::Unknown);
     }
 
     // calculate the page-aligned address
@@ -114,7 +115,7 @@ pub fn setup_syscall() -> Result<(), i32> {
 }
 
 #[cfg(not(feature = "dune"))]
-pub fn setup_syscall() -> Result<(), i32> {
+pub fn setup_syscall() -> Result<()> {
     log::warn!("No syscall support");
     Ok(())
 }
@@ -122,7 +123,7 @@ pub fn setup_syscall() -> Result<(), i32> {
 const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
 
 #[cfg(feature = "dune")]
-fn setup_vsyscall() -> Result<(), i32> {
+fn setup_vsyscall() -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
     let addr = dune_va_to_pa(VSYSCALL_ADDR);
     dune_vm_lookup(root, VSYSCALL_ADDR, CreateType::Normal)
@@ -133,12 +134,12 @@ fn setup_vsyscall() -> Result<(), i32> {
 }
 
 #[cfg(not(feature = "dune"))]
-fn setup_vsyscall() -> Result<(), i32> {
+fn setup_vsyscall() -> Result<()> {
     log::warn!("No vsyscall support");
     Ok(())
 }
 
-fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<(), i32> {
+fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
     let mut perm = PERM_NONE;
 
@@ -178,7 +179,7 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<(), i32> {
     dune_vm_map_phys( root, ent.begin, ent.len(), pa_start, perm)
 }
 
-fn __setup_mappings_precise() -> Result<(), i32> {
+fn __setup_mappings_precise() -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
     let va_start = VirtAddr::new(PAGEBASE.as_u64());
     let len = (MAX_PAGES * PGSIZE) as u64;
@@ -189,19 +190,24 @@ fn __setup_mappings_precise() -> Result<(), i32> {
         })
 }
 
-fn setup_vdso_cb(ent: &DuneProcmapEntry) -> Result<(), i32> {
+fn setup_vdso_cb(ent: &DuneProcmapEntry) -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
     let pa = dune_va_to_pa(ent.begin);
-    match ent.type_ {
+    let ret = match ent.type_ {
         ProcMapType::Vdso => Ok(PERM_U | PERM_R | PERM_X),
         ProcMapType::Vvar => Ok(PERM_U | PERM_R),
-        _ => Err(PERM_NONE),
+        _ => Err(Error::Unknown),
     }.and_then(|perm|{
         dune_vm_map_phys(root, ent.begin, ent.len(), pa, perm)
-    })
+    });
+    match ret {
+        Ok(_) => Ok(()),
+        Err(Error::Unknown) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
-fn __setup_mappings_full(layout: &DuneLayout) -> Result<(), i32> {
+fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
     // Map the entire address space
     let va = VirtAddr::new(0);
@@ -237,12 +243,12 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<(), i32> {
     Ok(())
 }
 
-pub fn setup_mappings(full: bool) -> Result<(), i32> {
+pub fn setup_mappings(full: bool) -> Result<()> {
     let mut layout: DuneLayout = unsafe { mem::zeroed() };
     let dune_fd = *DUNE_FD.lock().unwrap();
     let ret = unsafe { ioctl(dune_fd, DUNE_GET_LAYOUT, &mut layout) };
     if ret != 0 {
-        return Err(ret);
+        return Err(Error::Unknown);
     }
 
     unsafe {
@@ -258,7 +264,7 @@ pub fn setup_mappings(full: bool) -> Result<(), i32> {
     }
 }
 
-fn map_stack_cb(e: &DuneProcmapEntry) -> Result<(), i32> {
+fn map_stack_cb(e: &DuneProcmapEntry) -> Result<()> {
     let esp: u64 = rd_rsp();
     let addr = VirtAddr::new(esp);
     if addr >= e.begin && addr < e.end {
@@ -267,18 +273,18 @@ fn map_stack_cb(e: &DuneProcmapEntry) -> Result<(), i32> {
     Ok(())
 }
 
-fn map_stack() -> Result<(), i32> {
+fn map_stack() -> Result<()> {
     dune_procmap_iterate(map_stack_cb)
 }
 
 pub trait DuneHook {
-    fn pre_enter(&self, percpu: &mut DunePercpu) -> Result<(), i32>;
-    fn post_exit(&self, percpu: &mut DunePercpu) -> Result<(), i32>;
+    fn pre_enter(&self, percpu: &mut DunePercpu) -> Result<()>;
+    fn post_exit(&self, percpu: &mut DunePercpu) -> Result<()>;
 }
 
 // dune-spesicifc routines
 impl DuneHook for DunePercpu {
-    fn pre_enter(&self, percpu: &mut DunePercpu) -> Result<(), i32> {
+    fn pre_enter(&self, percpu: &mut DunePercpu) -> Result<()> {
         let safe_stack= VirtAddr::new(percpu.tss.tss_rsp[0]);
         unsafe { map_ptr(safe_stack, PGSIZE) };
 
@@ -288,7 +294,7 @@ impl DuneHook for DunePercpu {
         Ok(())
     }
 
-    fn post_exit(&self, percpu: &mut DunePercpu) -> Result<(), i32> {
+    fn post_exit(&self, percpu: &mut DunePercpu) -> Result<()> {
         Ok(())
     }
 }

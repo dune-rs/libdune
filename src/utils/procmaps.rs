@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use dune_sys::funcs;
 use x86_64::VirtAddr;
-// use std::path::Path;
+use crate::result::{Result, Error};
 
 /*
  * procmap.c - Parse linux process map information.
@@ -170,11 +170,12 @@ impl From<String> for DuneProcmapEntry {
     }
 }
 
-pub fn dune_procmap_iterate<F>(mut cb: F) -> Result<(), i32>
+pub fn dune_procmap_iterate<F>(mut cb: F) -> Result<()>
 where
-    F: FnMut(&DuneProcmapEntry) -> Result<(), i32>,
+    F: FnMut(&DuneProcmapEntry) -> Result<()>,
 {
-    let file = File::open("/proc/self/maps").map_err(|e| 1)?;
+    let file = File::open("/proc/self/maps")
+                        .map_err(|e| Error::Io(e))?;
     let reader = io::BufReader::new(file);
     reader.lines().map(|line| {
         if let Ok(line) = line {
@@ -186,12 +187,12 @@ where
     Ok(())
 }
 
-fn dune_procmap_dump_helper(e: &DuneProcmapEntry) -> Result<(), i32> {
+fn dune_procmap_dump_helper(e: &DuneProcmapEntry) -> Result<()> {
     println!("{}", e);
     Ok(())
 }
 
-pub fn dune_procmap_dump() -> Result<(), i32> {
+pub fn dune_procmap_dump() -> Result<()> {
     println!("--- Process Map Dump ---");
     dune_procmap_iterate(dune_procmap_dump_helper)
 }

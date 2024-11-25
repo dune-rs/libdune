@@ -8,6 +8,7 @@ use lazy_static::lazy_static;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, *};
 use crate::{core::*, dune_page_init};
+use crate::result::{Result, Error};
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -81,7 +82,7 @@ pub static mut DUNE_DEVICE: Option<DuneDevice> = None;
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_enter() -> Result<(), i32> {
+pub unsafe extern "C" fn dune_enter() -> Result<()> {
     // Check if this process already entered Dune before a fork...
     LPERCPU.with(|percpu| {
         let mut percpu = percpu.borrow_mut();
@@ -90,7 +91,7 @@ pub unsafe extern "C" fn dune_enter() -> Result<(), i32> {
             *percpu = DunePercpu::create().ok();
             // if still none, return error
             if let None = *percpu {
-                return Err(-1);
+                return Err(Error::Unknown);
             }
         }
 
@@ -120,11 +121,11 @@ pub unsafe extern "C" fn dune_enter() -> Result<(), i32> {
   * Returns 0 on success, otherwise failure.
   */
 #[no_mangle]
-pub extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
+pub extern "C" fn dune_init(map_full: bool) -> Result<()> {
     let dune_fd = &mut *DUNE_FD.lock().unwrap();
     *dune_fd = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
     if *dune_fd <= 0 {
-        return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
+        return Err(Error::Unknown);
     }
 
     // Initialize the root page table
@@ -137,15 +138,15 @@ pub extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
     });
 
     if dune_page_init().is_err() {
-        return Err(io::Error::new(ErrorKind::Other, "Unable to initialize page manager"));
+        return Err(Error::Unknown);
     }
     
     if setup_mappings(map_full).is_err() {
-        return Err(io::Error::new(ErrorKind::Other, "Unable to setup memory layout"));
+        return Err(Error::Unknown);
     }
 
     if setup_syscall().is_err() {
-        return Err(io::Error::new(ErrorKind::Other, "Unable to setup system calls"));
+        return Err(Error::Unknown);
     }
 
     setup_signals()?;
@@ -165,9 +166,9 @@ pub extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_init_and_enter() -> io::Result<()> {
+pub unsafe extern "C" fn dune_init_and_enter() -> Result<()> {
     if dune_init(true).is_err() {
-        return Err(io::Error::new(ErrorKind::Other, "Failed to initialize Dune"));
+        return Err(Error::Unknown);
     }
 
     dune_enter()

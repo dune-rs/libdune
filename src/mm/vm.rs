@@ -9,6 +9,7 @@ use x86_64::structures::paging::page_table::PageTableFlags;
 use crate::globals::*;
 use crate::mm::*;
 use crate::PGROOT;
+use crate::result::{Result, Error};
 
 // i << (12 + 9 * i)
 macro_rules! PDADDR {
@@ -73,7 +74,7 @@ impl default::Default for MapPhysData {
     }
 }
 
-pub type PageWalkCb<T: Sized> = fn(arg: *mut T, pte: &mut PageTableEntry, va: VirtAddr) -> Result<(), i32>;
+pub type PageWalkCb<T: Sized> = fn(arg: *mut T, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()>;
 
 fn pte_present(pte: &PageTableEntry) -> bool {
     pte.flags().contains(PageTableFlags::PRESENT)
@@ -141,7 +142,7 @@ fn __dune_vm_page_walk<T: Sized>(
     arg: *mut T,
     level: PageTableLevel,
     create: CreateType,
-) -> Result<(), i32>
+) -> Result<()>
 {
     let start_idx = start_va.page_table_index(level);
     let end_idx = end_va.page_table_index(level);
@@ -180,7 +181,7 @@ fn __dune_vm_page_walk<T: Sized>(
             }
 
             let ptep = alloc_page()
-                .map_or(Err(-libc::ENOMEM), |addr|{
+                .map_or(Err(libc::ENOMEM), |addr|{
                     // zero_memory(new_pte as *mut u8, PGSIZE);
                     let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
                     pte.set_addr(addr, flags);
@@ -214,7 +215,7 @@ pub fn dune_vm_page_walk<T>(
     end_va: VirtAddr,
     cb: PageWalkCb<T>,
     arg: &mut T,
-) -> Result<(), i32>
+) -> Result<()>
 where
     T: Sized,
 {
@@ -225,7 +226,7 @@ pub fn dune_vm_lookup(
     root: &mut PageTable,
     addr: VirtAddr,
     create: CreateType,
-) -> Result<&mut PageTableEntry, i32> {
+) -> Result<&mut PageTableEntry> {
     let i = addr.p4_index(); // P4D
     let j = addr.p3_index(); // PMD
     let k = addr.p2_index(); // PD
@@ -233,11 +234,11 @@ pub fn dune_vm_lookup(
     let p4de = &mut root[i];
     let pdpt = if !p4de.flags().contains(PageTableFlags::PRESENT) {
         if create == CreateType::None {
-            return Err(-libc::ENOENT);
+            return Err(Error::from(libc::ENOENT))
         }
 
         let pdptep = alloc_page()
-            .map_or(Err(-libc::ENOMEM), |addr|{
+            .map_or(Err(libc::ENOMEM), |addr|{
                 let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
                 p4de.set_addr(addr, flags);
                 // VA == PA
@@ -255,11 +256,11 @@ pub fn dune_vm_lookup(
     let pdpte = &mut pdpt[j];
     let pd = if !pdpte.flags().contains(PageTableFlags::PRESENT) {
         if create == CreateType::None {
-            return Err(-libc::ENOENT);
+            return Err(Error::LibcError(libc::ENOENT));
         }
 
         let pdep = alloc_page()
-            .map_or(Err(-libc::ENOMEM), |addr|{
+            .map_or(Err(libc::ENOMEM), |addr|{
                 let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
                 pdpte.set_addr(addr, flags);
                 // VA == PA
@@ -281,11 +282,11 @@ pub fn dune_vm_lookup(
     let pde = &mut pd[k];
     let pte = if !pte_present(pde) {
         if create == CreateType::None {
-            return Err(-libc::ENOENT);
+            return Err(Error::LibcError(libc::ENOENT));
         }
 
         let ptep = alloc_page()
-            .map_or(Err(-libc::ENOMEM), |addr|{
+            .map_or(Err(libc::ENOMEM), |addr|{
                 let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
                 pde.set_addr(addr, flags);
                 Ok(addr.as_u64() as *mut PageTable)
@@ -310,9 +311,9 @@ pub fn dune_vm_mprotect(
     start_va: VirtAddr,
     len: u64,
     perm: i32,
-) -> Result<(), i32> {
+) -> Result<()> {
     if perm & PERM_R == 0 && perm & PERM_W != 0 {
-        return Err(-libc::EINVAL);
+        return Err(Error::Unknown);
     }
 
     let mut pte_flags = get_pte_flags(perm);
@@ -329,7 +330,7 @@ pub fn dune_vm_mprotect(
     })
 }
 
-fn __dune_vm_mprotect_helper(flags: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<(), i32> {
+fn __dune_vm_mprotect_helper(flags: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<()> {
     let flags = unsafe { *flags };
     pte.set_flags(flags | (pte.flags() & PageTableFlags::HUGE_PAGE));
     Ok(())
@@ -341,7 +342,7 @@ pub fn dune_vm_map_phys(
     len: u64,
     pa: PhysAddr,
     perm: i32,
-) -> Result<(), i32> {
+) -> Result<()> {
     let mut data = MapPhysData::default();
     data.set_perm(get_pte_flags(perm))
         .set_va_base(va)
@@ -365,7 +366,7 @@ pub fn dune_vm_map_phys(
     )
 }
 
-fn __dune_vm_map_phys_helper(data: *mut MapPhysData, pte: &mut PageTableEntry, va: VirtAddr) -> Result<(), i32> {
+fn __dune_vm_map_phys_helper(data: *mut MapPhysData, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()> {
     let data = unsafe { &mut *data };
     let addr = PhysAddr::new(va - data.va_base + data.pa_base.as_u64());
     pte.set_addr(addr, data.perm);
@@ -377,9 +378,9 @@ pub fn dune_vm_map_pages(
     start_va: VirtAddr,
     len: u64,
     perm: i32,
-) -> Result<(), i32> {
+) -> Result<()> {
     if perm & PERM_R == 0 && perm & !PERM_R != 0 {
-        return Err(-libc::EINVAL);
+        return Err(Error::Unknown);
     }
 
     let mut pte_flags = get_pte_flags(perm);
@@ -393,7 +394,7 @@ pub fn dune_vm_map_pages(
     )
 }
 
-fn __dune_vm_map_pages_helper(arg: *mut PageTableFlags , pte: &mut PageTableEntry, _va: VirtAddr) -> Result<(), i32> {
+fn __dune_vm_map_pages_helper(arg: *mut PageTableFlags , pte: &mut PageTableEntry, _va: VirtAddr) -> Result<()> {
     let page = alloc_page();
     page.and_then(|addr|{
         let dst = addr.as_u64() as u64 as *mut PageTable;
@@ -403,10 +404,10 @@ fn __dune_vm_map_pages_helper(arg: *mut PageTableFlags , pte: &mut PageTableEntr
             pte.set_addr(addr, flags);
         }
         Some(())
-    }).ok_or(-libc::ENOMEM)
+    }).ok_or(Error::Unknown)
 }
 
-pub fn dune_vm_clone(root: *mut PageTable) -> Result<*mut PageTable, i32> {
+pub fn dune_vm_clone(root: *mut PageTable) -> Result<*mut PageTable> {
     let pa = alloc_page();
     pa.and_then(|pa|{
         let new_root = pa.as_u64() as *mut PageTable;
@@ -422,10 +423,10 @@ pub fn dune_vm_clone(root: *mut PageTable) -> Result<*mut PageTable, i32> {
         }).and_then(|()|{
             Ok(new_root)
         }).ok()
-    }).ok_or(-libc::ENOMEM)
+    }).ok_or(Error::Unknown)
 }
 
-fn __dune_vm_clone_helper(arg: *mut PageTable, pte: &mut PageTableEntry, va: VirtAddr) -> Result<(), i32> {
+fn __dune_vm_clone_helper(arg: *mut PageTable, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()> {
     let new_root = unsafe { &mut *(arg as *mut PageTable) };
     let ret = dune_vm_lookup(new_root, va, CreateType::Normal);
     ret.and_then(|a|{
@@ -435,10 +436,10 @@ fn __dune_vm_clone_helper(arg: *mut PageTable, pte: &mut PageTableEntry, va: Vir
         }
         new_pte.set_addr(pte.addr(), pte.flags());
         Ok(())
-    }).map_err(|_| -libc::ENOMEM)
+    })
 }
 
-pub fn dune_vm_free(root: *mut PageTable) -> Result<(), i32>{
+pub fn dune_vm_free(root: *mut PageTable) -> Result<()>{
     __dune_vm_page_walk(
         root, VA_START, VA_END,
         __dune_vm_free_helper,
@@ -457,7 +458,7 @@ pub fn dune_vm_free(root: *mut PageTable) -> Result<(), i32>{
     Ok(())
 }
 
-fn __dune_vm_free_helper(_arg: *mut c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<(), i32> {
+fn __dune_vm_free_helper(_arg: *mut c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<()> {
     let pg = dune_pa2page(pte.addr());
     if dune_page_isfrompool(pte.addr()) {
         dune_page_put(pg);
@@ -467,7 +468,7 @@ fn __dune_vm_free_helper(_arg: *mut c_void, pte: &mut PageTableEntry, _va: VirtA
     Ok(())
 }
 
-pub fn dune_vm_unmap(root: *mut PageTable, va: VirtAddr, len: u64) -> Result<(), i32> {
+pub fn dune_vm_unmap(root: *mut PageTable, va: VirtAddr, len: u64) -> Result<()> {
     __dune_vm_page_walk(
         root,
         va,va + len - 1,
@@ -499,7 +500,7 @@ pub unsafe fn dune_vm_default_pgflt_handler(addr: VirtAddr, fec: u64) {
 
         // Duplicate the page
         let addr = alloc_page();
-        addr.map_or(-libc::ENOMEM, |addr|{
+        addr.map_or(Err(Error::Unknown), |addr|{
             let new_page = addr.as_u64() as *mut PageTable;
             // clear new page
             ptr::write_bytes(new_page, 0, PGSIZE as usize);
@@ -512,7 +513,7 @@ pub unsafe fn dune_vm_default_pgflt_handler(addr: VirtAddr, fec: u64) {
             // Map page
             pte.set_addr(addr, flags);
             dune_flush_tlb_one(new_page as u64);
-            0
+            Ok(())
         });
     }
 }
