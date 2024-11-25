@@ -56,8 +56,8 @@ pub fn dune_register_pgflt_handler(cb: DunePgfltCb) {
 }
 
 unsafe fn addr_is_mapped(va_start: VirtAddr) -> bool {
-    let mut ret = dune_vm_lookup(PGROOT, va_start, CreateType::None);
-    match ret {
+    let root = &mut *PGROOT.lock().unwrap();
+    match dune_vm_lookup(root, va_start, CreateType::None) {
         Ok(pte) => {
             if pte.flags().contains(PageTableFlags::PRESENT) {
                 return true;

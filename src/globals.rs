@@ -1,5 +1,6 @@
-use std::arch::asm;
+use std::{arch::asm, u64};
 use libc::c_void;
+use x86_64::VirtAddr;
 
 pub const NPTBITS: i32 = 9; // log2(NPageTableEntryRIES)
 pub const NPTLVLS: usize = 3; // page table depth -1
@@ -358,8 +359,8 @@ pub const PERM_BIG: i32 = 0x0100;
 pub const PERM_BIG_1GB: i32 = 0x0200;
 
 // Helper Macros
-pub const VA_START: *const c_void = usize::MIN as *const c_void;
-pub const VA_END: *const c_void = usize::MAX as *const c_void;
+pub const VA_START: VirtAddr = VirtAddr::new(u64::MIN);
+pub const VA_END: VirtAddr = VirtAddr::new(u64::MAX);
 
 pub const PERM_SCODE: i32 = PERM_R | PERM_X;
 pub const PERM_STEXT: i32 = PERM_R | PERM_W;
@@ -439,4 +440,35 @@ pub fn rdmsrl(msr: u32) -> u64 {
         );
     }
     ((high as u64) << 32) | (low as u64)
+}
+
+pub fn rd_rsp() -> u64 {
+    let esp: u64;
+    unsafe {
+        asm!("mov %rsp, {}", out(reg) esp);
+    }
+    esp
+}
+
+pub fn dune_flush_tlb_one(addr: u64) {
+    unsafe {
+        asm!("invlpg ({})", in(reg) addr, options(nostack, preserves_flags));
+    }
+}
+
+pub fn dune_flush_tlb() {
+    unsafe {
+        asm!(
+            "mov %cr3, %rax",
+            "mov %rax, %cr3",
+            out("rax") _,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+pub fn load_cr3(cr3: u64) {
+    unsafe {
+        asm!("mov {0}, %cr3", in(reg) cr3, options(nostack, preserves_flags));
+    }
 }

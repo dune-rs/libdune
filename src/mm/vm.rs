@@ -1,11 +1,10 @@
-use std::arch::asm;
-use std::ptr;
+use std::{default, ptr};
+use dune_sys::funcs;
 use libc::c_void;
 use x86_64::structures::paging::page_table::PageTableLevel;
 use x86_64::structures::paging::PageTable;
-use x86_64::structures::paging::PageTableIndex;
 use x86_64::VirtAddr;
-use x86_64::structures::paging::page_table::PageTableEntry;
+use x86_64::{structures::paging::page_table::PageTableEntry, PhysAddr};
 use x86_64::structures::paging::page_table::PageTableFlags;
 use crate::globals::*;
 use crate::mm::*;
@@ -82,23 +81,6 @@ pub fn put_page(page: *mut c_void) {
     dune_page_put(pg);
 }
 
-pub unsafe fn dune_flush_tlb_one(addr: u64) {
-    asm!("invlpg ({})", in(reg) addr, options(nostack, preserves_flags));
-}
-
-pub unsafe fn dune_flush_tlb() {
-    asm!(
-        "mov %cr3, %rax",
-        "mov %rax, %cr3",
-        out("rax") _,
-        options(nostack, preserves_flags)
-    );
-}
-
-pub unsafe fn load_cr3(cr3: u64) {
-    asm!("mov {0}, %cr3", in(reg) cr3, options(nostack, preserves_flags));
-}
-
 pub fn get_pte_flags(perms: i32) -> PageTableFlags {
     let mut flags = PageTableFlags::empty();
     if perms & PERM_R != 0 {
@@ -129,7 +111,7 @@ pub fn get_pte_flags(perms: i32) -> PageTableFlags {
     flags
 }
 
-fn __dune_vm_page_walk(
+fn __dune_vm_page_walk<PageWalkCb>(
     root: *mut PageTable,
     start_va: VirtAddr,
     end_va: VirtAddr,
@@ -137,7 +119,10 @@ fn __dune_vm_page_walk(
     arg: *const c_void,
     level: PageTableLevel,
     create: CreateType,
-) -> i32 {
+) -> Result<(), i32>
+where
+    PageWalkCb: Fn(*const c_void, &mut PageTableEntry, VirtAddr) -> Result<(), i32>
+{
 
     let start_idx = start_va.page_table_index(level);
     let end_idx = end_va.page_table_index(level);
@@ -196,7 +181,7 @@ fn __dune_vm_page_walk(
         });
     }
 
-    0
+    Ok(())
 }
 
 pub fn dune_vm_page_walk(
@@ -205,7 +190,10 @@ pub fn dune_vm_page_walk(
     end_va: VirtAddr,
     cb: PageWalkCb,
     arg: *const c_void,
-) -> i32 {
+) -> Result<(), i32>
+where
+    PageWalkCb: Fn(*const c_void, &mut PageTableEntry, VirtAddr) -> Result<(), i32>
+{
     __dune_vm_page_walk(root, start_va, end_va, cb, arg, PageTableLevel::Three, CreateType::None)
 }
 
@@ -280,39 +268,34 @@ pub fn dune_vm_lookup(
 
 pub fn dune_vm_mprotect(
     root: &mut PageTable,
-    va: VirtAddr,
+    start_va: VirtAddr,
     len: u64,
     perm: i32,
-) -> i32 {
+) -> Result<(), i32> {
     if perm & PERM_R == 0 && perm & PERM_W != 0 {
-        return -libc::EINVAL;
+        return Err(-libc::EINVAL);
     }
 
     let pte_flags = get_pte_flags(perm);
 
-    let ret = __dune_vm_page_walk(
-        root,
-        va,
-        va + len - 1,
+    __dune_vm_page_walk(
+        root, start_va, start_va + len - 1,
         __dune_vm_mprotect_helper,
         &pte_flags as *const _ as *const c_void,
         PageTableLevel::Four,
         CreateType::None,
-    );
-    if ret != 0 {
-        return ret;
-    }
-
-    unsafe { dune_flush_tlb() };
-    0
+    ).and_then(|()| {
+        dune_flush_tlb();
+        Ok(())
+    })
 }
 
-fn __dune_vm_mprotect_helper(arg: *const c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> i32 {
+fn __dune_vm_mprotect_helper(arg: *const c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<(), i32> {
     unsafe{
         let flags = *(arg as *const PageTableFlags);
         pte.set_flags(flags | (pte.flags() & PageTableFlags::HUGE_PAGE));
     }
-    0
+    Ok(())
 }
 
 pub fn dune_vm_map_phys(
@@ -321,12 +304,11 @@ pub fn dune_vm_map_phys(
     len: u64,
     pa: PhysAddr,
     perm: i32,
-) -> i32 {
-    let data = MapPhysData {
-        perm: get_pte_flags(perm),
-        va_base: va,
-        pa_base: pa,
-    };
+) -> Result<(), i32> {
+    let mut data = MapPhysData::default();
+    data.set_perm(get_pte_flags(perm))
+        .set_va_base(va)
+        .set_pa_base(pa);
 
     let create = 
     if perm & PERM_BIG != 0 {
@@ -348,23 +330,36 @@ pub fn dune_vm_map_phys(
     )
 }
 
+#[repr(C)]
+#[derive(Debug,Clone,PartialEq,Eq)]
 struct MapPhysData {
     perm: PageTableFlags,
     va_base: VirtAddr,
     pa_base: PhysAddr,
 }
 
-// import PyhsAddr
-use x86_64::PhysAddr;
+impl MapPhysData {
+    funcs!(perm, PageTableFlags);
+    funcs!(va_base, VirtAddr);
+    funcs!(pa_base, PhysAddr);
+}
 
-fn __dune_vm_map_phys_helper(arg: *const c_void, pte: &mut PageTableEntry, va: VirtAddr) -> i32 {
-    // convert arg to MapPhysData
-    unsafe {
-        let data = (arg as *const MapPhysData).as_ref().unwrap();
-        let addr = PhysAddr::new(va - data.va_base + data.pa_base.as_u64());
-        pte.set_addr(addr, data.perm);
-        0
+impl default::Default for MapPhysData {
+    fn default() -> Self {
+        MapPhysData {
+            perm: PageTableFlags::empty(),
+            va_base: VirtAddr::zero(),
+            pa_base: PhysAddr::zero(),
+        }
     }
+}
+
+fn __dune_vm_map_phys_helper(arg: *const c_void, pte: &mut PageTableEntry, va: VirtAddr) -> Result<(), i32> {
+    // convert arg to MapPhysData
+    let data = unsafe { (arg as *const MapPhysData).as_ref().unwrap() };
+    let addr = PhysAddr::new(va - data.va_base + data.pa_base.as_u64());
+    pte.set_addr(addr, data.perm);
+    Ok(())
 }
 
 pub fn dune_vm_map_pages(
@@ -372,9 +367,9 @@ pub fn dune_vm_map_pages(
     va: VirtAddr,
     len: u64,
     perm: i32,
-) -> i32 {
+) -> Result<(), i32> {
     if perm & PERM_R == 0 && perm & !PERM_R != 0 {
-        return -libc::EINVAL;
+        return Err(-libc::EINVAL);
     }
 
     let pte_flags = get_pte_flags(perm);
@@ -390,92 +385,81 @@ pub fn dune_vm_map_pages(
     )
 }
 
-fn __dune_vm_map_pages_helper(arg: *const c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> i32 {
+fn __dune_vm_map_pages_helper(arg: *const c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<(), i32> {
     let page = alloc_page();
     page.and_then(|addr|{
-        let dst = addr.as_u64() as u64 as *mut c_void;
-        unsafe { ptr::write_bytes(dst as *mut u8, 0, PGSIZE as usize) };
+        let dst = addr.as_u64() as u64 as *mut PageTable;
         unsafe {
+            ptr::write_bytes(dst as *mut u8, 0, PGSIZE as usize);
             let flags = *(arg as *const PageTableFlags);
             pte.set_addr(addr, flags);
         }
-        Some(0)
-    }
-    ).map_or(-libc::ENOMEM, |a| a)
+        Some(())
+    }).ok_or(-libc::ENOMEM)
 }
 
-pub fn dune_vm_clone(root: *mut PageTable) -> *mut PageTable {
+pub fn dune_vm_clone(root: *mut PageTable) -> Result<*mut PageTable, i32> {
     let pa = alloc_page();
     pa.and_then(|pa|{
         let new_root = pa.as_u64() as *mut PageTable;
         unsafe { ptr::write_bytes(new_root, 0, PGSIZE as usize) };
-        let ret = __dune_vm_page_walk(
-            root,
-            VirtAddr::from_ptr(VA_START),
-            VirtAddr::from_ptr(VA_END),
+        __dune_vm_page_walk(
+            root, VA_START, VA_END,
             __dune_vm_clone_helper,
             new_root as *const c_void,
             PageTableLevel::Four,
             CreateType::None,
-        );
-        if ret < 0 {
+        ).map_err(|_a|{
             dune_vm_free(new_root as *mut PageTable);
-            return None;
-        }
-        Some(new_root as *mut PageTable)
-    }).map_or(ptr::null_mut(), |a| a)
+        }).and_then(|()|{
+            Ok(new_root)
+        }).ok()
+    }).ok_or(-libc::ENOMEM)
 }
 
-fn __dune_vm_clone_helper(arg: *const c_void, pte: &mut PageTableEntry, va: VirtAddr) -> i32 {
+fn __dune_vm_clone_helper(arg: *const c_void, pte: &mut PageTableEntry, va: VirtAddr) -> Result<(), i32> {
     let new_root = unsafe { &mut *(arg as *mut PageTable) };
     let ret = dune_vm_lookup(new_root, va, CreateType::Normal);
-    match ret {
-        Ok(new_pte) => {
-            if dune_page_isfrompool(pte.addr()) {
-                dune_page_get(dune_pa2page(pte.addr()));
-            }
-            new_pte.set_addr(pte.addr(), pte.flags());
-            0
+    ret.and_then(|a|{
+        let new_pte = a;
+        if dune_page_isfrompool(pte.addr()) {
+            dune_page_get(dune_pa2page(pte.addr()));
         }
-        Err(_) => {
-            return -libc::ENOMEM;
-        }
-    }
+        new_pte.set_addr(pte.addr(), pte.flags());
+        Ok(())
+    }).map_err(|_| -libc::ENOMEM)
 }
 
-pub fn dune_vm_free(root: *mut PageTable) {
+pub fn dune_vm_free(root: *mut PageTable) -> Result<(), i32>{
     __dune_vm_page_walk(
-        root,
-        VirtAddr::from_ptr(VA_START),
-        VirtAddr::from_ptr(VA_END),
+        root, VA_START, VA_END,
         __dune_vm_free_helper,
         ptr::null(),
         PageTableLevel::Three,
         CreateType::None,
-    );
+    )?;
     __dune_vm_page_walk(
-        root,
-        VirtAddr::from_ptr(VA_START),
-        VirtAddr::from_ptr(VA_END),
+        root, VA_START, VA_END,
         __dune_vm_free_helper,
         ptr::null(),
         PageTableLevel::One,
         CreateType::None,
-    );
+    )?;
     put_page(root as *mut c_void);
+    Ok(())
 }
 
-fn __dune_vm_free_helper(_arg: *const c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> i32 {
+fn __dune_vm_free_helper(_arg: *const c_void, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<(), i32> {
     let pg = dune_pa2page(pte.addr());
     if dune_page_isfrompool(pte.addr()) {
         dune_page_put(pg);
     }
 
     pte.set_unused();
-    0
+    Ok(())
 }
 
-pub fn dune_vm_unmap(root: *mut PageTable, va: VirtAddr, len: u64) {
+pub fn dune_vm_unmap(root: *mut PageTable, va: VirtAddr, len: u64) -> Result<(), i32> {
     __dune_vm_page_walk(
         root,
         va,va + len - 1,
@@ -483,19 +467,20 @@ pub fn dune_vm_unmap(root: *mut PageTable, va: VirtAddr, len: u64) {
         ptr::null_mut(),
         PageTableLevel::Four,
         CreateType::None,
-    );
-    unsafe { dune_flush_tlb() };
+    )?;
+    dune_flush_tlb();
+    Ok(())
 }
 
 pub unsafe fn dune_vm_default_pgflt_handler(addr: VirtAddr, fec: u64) {
     // let pte: *mut PageTableEntry = ptr::null_mut();
-    let pte = dune_vm_lookup(PGROOT, addr, CreateType::None)?;
+    let root = &mut *PGROOT.lock().unwrap();
+    let pte = dune_vm_lookup(root, addr, CreateType::None).unwrap();
 
-    let flags = pte.flags();
-    let cow = flags.contains(PageTableFlags::BIT_9);
+    let cow = pte.flags().contains(PageTableFlags::BIT_9);
 
     if (fec & FEC_W) != 0 && cow {
-        let pg = dune_pa2page((*pte).addr());
+        let pg = dune_pa2page(pte.addr());
 
         // Compute new permissions, clear the COW bit, and set the writable bit
         let flags = pte.flags() & !PageTableFlags::BIT_9 | PageTableFlags::WRITABLE;
@@ -506,9 +491,8 @@ pub unsafe fn dune_vm_default_pgflt_handler(addr: VirtAddr, fec: u64) {
 
         // Duplicate the page
         let addr = alloc_page();
-        // if alloc_page fails, we should panic
-        addr.and_then(|addr|{
-            let new_page = addr.as_u64() as *mut c_void;
+        addr.map_or(-libc::ENOMEM, |addr|{
+            let new_page = addr.as_u64() as *mut PageTable;
             // clear new page
             ptr::write_bytes(new_page, 0, PGSIZE as usize);
 
@@ -519,8 +503,8 @@ pub unsafe fn dune_vm_default_pgflt_handler(addr: VirtAddr, fec: u64) {
 
             // Map page
             pte.set_addr(addr, flags);
-            unsafe { dune_flush_tlb_one(new_page as u64) };
-            None
+            dune_flush_tlb_one(new_page as u64);
+            0
         });
     }
 }

@@ -219,11 +219,12 @@ pub fn dune_set_user_fs(fs_base: u64) {
 }
 
 pub unsafe fn do_dune_enter(percpu: &mut DunePercpu) -> io::Result<()> {
+    let root = &mut *PGROOT.lock().unwrap();
     let mut conf = DuneConfig::default();
     conf.set_vcpu(0)
         .set_rip(&__dune_ret as *const _ as u64)
         .set_rsp(0)
-        .set_cr3(PGROOT as u64)
+        .set_cr3(root as *const _ as u64)
         .set_rflags(0x2);
 
     percpu.setup_gdt();

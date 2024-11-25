@@ -1,12 +1,11 @@
-use std::arch::asm;
 use std::{mem, ptr};
 use std::{ffi::c_void, io};
 use libc::ioctl;
 use dune_sys::*;
 use x86_64::{PhysAddr, VirtAddr};
-use crate::globals::{PERM_BIG, PERM_NONE, PERM_R, PERM_U, PERM_W, PERM_X};
-use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE};
-use crate::{core::*, dune_vm_map_phys, globals::PGSIZE};
+use crate::globals::{rd_rsp, PERM_BIG, PERM_NONE, PERM_R, PERM_U, PERM_W, PERM_X};
+use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
+use crate::{core::{PGROOT, *}, dune_vm_map_phys};
 
 /// The physical address limit of the address space
 ///  ptr - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
@@ -37,13 +36,15 @@ fn dune_va_to_pa(ptr: VirtAddr) -> PhysAddr {
     }
 }
 
-unsafe fn map_ptr(p: *mut c_void, len: u64) {
+unsafe fn map_ptr(page: VirtAddr, len: usize) {
     // Align the pointer to the page size
-    let page = VirtAddr::from_ptr(p);
     let page_end = page + len as u64;
+    let len = page_end - page;
     let pa = dune_va_to_pa(page);
-
-    dune_vm_map_phys(PGROOT, page, len, pa, PERM_R | PERM_W);
+    let perm = PERM_R | PERM_W;
+    
+    let root = &mut *PGROOT.lock().unwrap();
+    dune_vm_map_phys(root, page, len, pa, perm);
 }
 
 #[cfg(feature = "syscall")]
@@ -117,6 +118,7 @@ fn setup_vsyscall() {
 }
 
 fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
+    let root = &mut *PGROOT.lock().unwrap();
     let mut perm = PERM_NONE;
 
     // page region already mapped
@@ -132,7 +134,7 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
     if ent.type_ == ProcMapType::Vdso {
         let pa = dune_va_to_pa(ent.begin);
         unsafe {
-            dune_vm_map_phys(PGROOT, ent.begin, ent.len(), pa, PERM_U | PERM_R | PERM_X);
+            dune_vm_map_phys(root, ent.begin, ent.len(), pa, PERM_U | PERM_R | PERM_X);
         }
         return;
     }
@@ -140,7 +142,7 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
     if ent.type_ == ProcMapType::Vvar {
         let pa = dune_va_to_pa(ent.begin);
         unsafe {
-            dune_vm_map_phys(PGROOT, ent.begin, ent.len(), pa, PERM_U | PERM_R);
+            dune_vm_map_phys(root, ent.begin, ent.len(), pa, PERM_U | PERM_R);
         }
         return;
     }
@@ -155,20 +157,17 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) {
         perm |= PERM_X;
     }
 
-    let ret = unsafe {
-        let pa_start = dune_va_to_pa(ent.begin);
-        dune_vm_map_phys( PGROOT, ent.begin, ent.len(), pa_start, perm)
-    };
+    let pa_start = dune_va_to_pa(ent.begin);
+    let ret = dune_vm_map_phys( root, ent.begin, ent.len(), pa_start, perm);
     assert!(ret == 0);
 }
 
 fn __setup_mappings_precise() -> io::Result<()> {
-    let ret = unsafe {
-        let va_start = VirtAddr::new(PAGEBASE.as_u64());
-        let len = (MAX_PAGES * PGSIZE) as u64;
-        let pa_start = PAGEBASE;
-        dune_vm_map_phys(PGROOT, va_start, len, pa_start, PERM_R | PERM_W | PERM_BIG)
-    };
+    let root = &mut *PGROOT.lock().unwrap();
+    let va_start = VirtAddr::new(PAGEBASE.as_u64());
+    let len = (MAX_PAGES * PGSIZE) as u64;
+    let pa_start = PAGEBASE;
+    let ret = dune_vm_map_phys(root, va_start, len, pa_start, PERM_R | PERM_W | PERM_BIG);
     if ret != 0 {
         return Err(io::Error::from_raw_os_error(ret));
     }
@@ -179,6 +178,7 @@ fn __setup_mappings_precise() -> io::Result<()> {
 }
 
 fn setup_vdso_cb(ent: &DuneProcmapEntry) {
+    let root = &mut *PGROOT.lock().unwrap();
     let pa = dune_va_to_pa(ent.begin);
     let perm = match ent.type_ {
         ProcMapType::Vdso => Ok(PERM_U | PERM_R | PERM_X),
@@ -187,40 +187,39 @@ fn setup_vdso_cb(ent: &DuneProcmapEntry) {
     };
 
     if let Ok(perm) = perm {
-        unsafe {
-            dune_vm_map_phys(PGROOT, ent.begin, ent.len(), pa, perm);
-        }
+        dune_vm_map_phys(root, ent.begin, ent.len(), pa, perm);
     }
 }
 
 unsafe fn __setup_mappings_full(layout: &DuneLayout) -> io::Result<()> {
+    let root = &mut *PGROOT.lock().unwrap();
     // Map the entire address space
     let va = VirtAddr::new(0);
     let pa = PhysAddr::new(0);
     let len = 1 << 32; // 4GB
     let perm = PERM_R | PERM_W | PERM_X | PERM_U;
-    dune_vm_map_phys(PGROOT, va, len, pa, perm);
+    dune_vm_map_phys(root, va, len, pa, perm);
 
     // Map the base_map region
     let va = layout.base_map();
     let pa = dune_mmap_addr_to_pa(va);
     let len = GPA_MAP_SIZE as u64;
     let perm = PERM_R | PERM_W | PERM_X | PERM_U;
-    dune_vm_map_phys(PGROOT, va, len, pa, perm);
+    dune_vm_map_phys(root, va, len, pa, perm);
 
     // Map the base_stack region
     let va = layout.base_stack();
     let pa = dune_stack_addr_to_pa(va);
     let len = GPA_STACK_SIZE as u64;
     let perm = PERM_R | PERM_W | PERM_X | PERM_U;
-    dune_vm_map_phys(PGROOT, layout.base_stack(), len, pa, perm);
+    dune_vm_map_phys(root, va, len, pa, perm);
 
     // Map the page table region
     let va = VirtAddr::new(PAGEBASE.as_u64());
     let pa = dune_va_to_pa(va);
     let len = (MAX_PAGES * PGSIZE) as u64;
     let perm = PERM_R | PERM_W | PERM_BIG;
-    dune_vm_map_phys(PGROOT, va, len, pa, perm);
+    dune_vm_map_phys(root, va, len, pa, perm);
 
     dune_procmap_iterate(setup_vdso_cb);
     setup_vsyscall();
@@ -249,14 +248,10 @@ pub unsafe fn setup_mappings(full: bool) -> io::Result<()> {
 }
 
 fn map_stack_cb(e: &DuneProcmapEntry) {
-    let esp: u64;
-    unsafe {
-        asm!("mov %rsp, {}", out(reg) esp);
-    }
-
+    let esp: u64 = rd_rsp();
     let addr = VirtAddr::new(esp);
     if addr >= e.begin && addr < e.end {
-        unsafe { map_ptr(e.begin, e.len()) };
+        unsafe { map_ptr(e.begin, e.len() as usize) };
     }
 }
 
@@ -272,8 +267,8 @@ pub trait DuneHook {
 // dune-spesicifc routines
 impl DuneHook for DunePercpu {
     fn pre_enter(&self, _percpu: &mut DunePercpu) -> io::Result<()> {
-        let safe_stack= _percpu.tss.tss_rsp[0];
-        unsafe { map_ptr(safe_stack, PGSIZE as usize) };
+        let safe_stack= VirtAddr::new(_percpu.tss.tss_rsp[0]);
+        unsafe { map_ptr(safe_stack, PGSIZE) };
 
         unsafe { setup_syscall()? };
         map_stack();

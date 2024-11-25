@@ -1,13 +1,12 @@
 use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
-use std::ptr;
+use std::sync::Mutex;
 use dune_sys::{DuneConfig, DuneDevice, DuneRetCode};
 use libc::{open, O_RDWR};
 use x86_64::structures::paging::PageTable;
 use x86_64::{PhysAddr, VirtAddr};
-
-use crate::mm::*;
-use crate::core::*;
+use lazy_static::lazy_static;
+use crate::{core::*, dune_page_init};
 
 use std::cell::RefCell;
 
@@ -30,8 +29,11 @@ thread_local! {
     static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
-// PageTable root
-pub static mut PGROOT: *mut PageTable = ptr::null_mut();
+lazy_static! {
+    pub static ref PGROOT: Mutex<PageTable> = Mutex::new(PageTable::new());
+}
+
+// pub static mut PGROOT: *mut PageTable = ptr::null_mut();
 pub static mut PHYS_LIMIT: PhysAddr = PhysAddr::new(0);
 pub static mut MMAP_BASE: VirtAddr = VirtAddr::new(0);
 pub static mut STACK_BASE: VirtAddr = VirtAddr::new(0);
@@ -74,6 +76,11 @@ pub unsafe extern "C" fn dune_enter() -> io::Result<()> {
     Ok(())
 }
 
+enum DuneError {
+    DuneEnter,
+    DuneExit,
+}
+
  /**
   * dune_init - initializes libdune
   *
@@ -96,25 +103,21 @@ pub unsafe extern "C" fn dune_init(map_full: bool) -> io::Result<()> {
         return Err(io::Error::new(ErrorKind::Other, "Failed to open Dune device"));
     }
 
-    PGROOT = unsafe { libc::memalign(PGSIZE, PGSIZE) as *mut PageTable };
-    if PGROOT.is_null() {
-        unsafe { libc::close(DUNE_FD) };
-        return Err(io::Error::new(ErrorKind::Other, "Failed to allocate pgroot"));
-    }
-    unsafe { ptr::write_bytes(PGROOT, 0, PGSIZE) };
+    lazy_static::initialize(&PGROOT);
+    // let mut pgroot = PGROOT.lock();
+    // pgroot.zero();
+
+    // unsafe { ptr::write_bytes(PGROOT, 0, PGSIZE) };
 
     if dune_page_init().is_err() {
-        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Unable to initialize page manager"));
     }
-
+    
     if setup_mappings(map_full).is_err() {
-        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Unable to setup memory layout"));
     }
 
     if setup_syscall().is_err() {
-        unsafe { libc::close(DUNE_FD) };
         return Err(io::Error::new(ErrorKind::Other, "Unable to setup system calls"));
     }
 
