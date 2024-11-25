@@ -57,14 +57,92 @@ fn dune_va_to_pa(ptr: VirtAddr) -> PhysAddr {
     }
 }
 
-unsafe fn map_ptr(page: VirtAddr, len: usize) -> Result<()> {
-    // Align the pointer to the page size
-    let page_end = page + len as u64;
-    let len = page_end - page;
-    let pa = dune_va_to_pa(page);
-    let perm = PERM_R | PERM_W;
+#[derive(Debug, Clone, Copy)]
+struct MmapArgs {
+    va: VirtAddr,
+    len: u64,
+    pa: PhysAddr,
+    perm: i32,
+}
+
+impl MmapArgs {
+    funcs!(va, VirtAddr);
+    funcs!(len, u64);
+    funcs!(pa, PhysAddr);
+    funcs!(perm, i32);
+
+    fn new(va: VirtAddr, len: u64, pa: PhysAddr, perm: i32) -> Self {
+        Self { va, len, pa, perm }
+    }
+
+    pub fn map (&self) -> Result<()> {
+        let root = &mut *PGROOT.lock().unwrap();
+        dune_vm_map_phys(root, self.va, self.len, self.pa, self.perm)
+    }
+}
+
+impl Default for MmapArgs {
+    fn default() -> Self {
+        Self {
+            va: VirtAddr::new(0),
+            len: 0,
+            pa: PhysAddr::new(0),
+            perm: 0,
+        }
+    }
+}
+
+impl From<&DuneProcmapEntry> for MmapArgs {
+    fn from(ent: &DuneProcmapEntry) -> Self {
+        let mut perm = PERM_NONE;
+        let pa = dune_va_to_pa(ent.begin());
+
+        perm = match ent.type_() {
+            ProcMapType::Vdso => PERM_U | PERM_R | PERM_X,
+            ProcMapType::Vvar => PERM_U | PERM_R,
+            _ => {
+                if ent.r() {
+                    perm |= PERM_R;
+                }
+                if ent.w() {
+                    perm |= PERM_W;
+                }
+                if ent.x() {
+                    perm |= PERM_X;
+                }
+                perm
+            },
+        };
+
+        Self::new(ent.begin(), ent.len(), pa, perm)
+    }
+}
+
+fn dune_vm_create(
+    start: VirtAddr,
+    pa: PhysAddr,
+    flags: PageTableFlags,
+    create: CreateType
+) -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
-    dune_vm_map_phys(root, page, len, pa, perm)
+    dune_vm_lookup(root, start, create)
+        .and_then(|pte| {
+            pte.set_addr(pa, flags);
+            Ok(())
+        })
+}
+
+unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
+    // Align the pointer to the page size
+    let page = p.align_down(PGSIZE as u64);
+    let page_end = (p + len as u64).align_down(PGSIZE as u64);
+    let len = page_end - page + PGSIZE as u64;
+    MmapArgs::default()
+            .set_va(page)
+            .set_len(len)
+            .set_pa(dune_va_to_pa(page))
+            .set_perm(PERM_R | PERM_W)
+            .map()
 }
 
 #[cfg(feature = "dune")]
@@ -104,11 +182,7 @@ pub fn setup_syscall() -> Result<()> {
     for i in (0..=PGSIZE).step_by(PGSIZE) {
         let start = lstara + i as u64;
         let pa = dune_mmap_addr_to_pa(page + i as u64);
-        dune_vm_lookup(root, start, CreateType::Normal)
-            .and_then(|pte|{
-                pte.set_addr(pa, PageTableFlags::PRESENT);
-                Ok(())
-            })?;
+        dune_vm_create(start, pa, PageTableFlags::PRESENT, CreateType::Normal)?;
     }
 
     Ok(())
@@ -124,13 +198,10 @@ const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
 
 #[cfg(feature = "dune")]
 fn setup_vsyscall() -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
     let addr = dune_va_to_pa(VSYSCALL_ADDR);
-    dune_vm_lookup(root, VSYSCALL_ADDR, CreateType::Normal)
-        .and_then(|pte| {
-            pte.set_addr(addr, PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE);
-            Ok(())
-        })
+    dune_vm_create(VSYSCALL_ADDR, addr,
+            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
+            CreateType::Normal)?;
 }
 
 #[cfg(not(feature = "dune"))]
@@ -139,10 +210,8 @@ fn setup_vsyscall() -> Result<()> {
     Ok(())
 }
 
-fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
-    let mut perm = PERM_NONE;
 
+fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<()> {
     // page region already mapped
     if ent.begin() == VirtAddr::new(PAGEBASE.as_u64()) {
         return Ok(());
@@ -153,89 +222,54 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<()> {
         return Ok(());
     }
 
-    if ent.type_() == ProcMapType::Vdso {
-        let pa = dune_va_to_pa(ent.begin());
-        dune_vm_map_phys(root, ent.begin(), ent.len(), pa, PERM_U | PERM_R | PERM_X);
-        return Ok(());
-    }
-
-    if ent.type_() == ProcMapType::Vvar {
-        let pa = dune_va_to_pa(ent.begin());
-        dune_vm_map_phys(root, ent.begin(), ent.len(), pa, PERM_U | PERM_R);
-        return Ok(());
-    }
-
-    if ent.r() {
-        perm |= PERM_R;
-    }
-    if ent.w() {
-        perm |= PERM_W;
-    }
-    if ent.x() {
-        perm |= PERM_X;
-    }
-
-    let pa_start = dune_va_to_pa(ent.begin());
-    dune_vm_map_phys( root, ent.begin(), ent.len(), pa_start, perm)
+    MmapArgs::from(ent).map()
 }
 
 fn __setup_mappings_precise() -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
-    let va_start = VirtAddr::new(PAGEBASE.as_u64());
-    let len = (MAX_PAGES * PGSIZE) as u64;
-    let pa_start = PAGEBASE;
-    dune_vm_map_phys(root, va_start, len, pa_start, PERM_R | PERM_W | PERM_BIG)
-        .and_then(|()| {
-            dune_procmap_iterate(__setup_mappings_cb)
-        })
+    MmapArgs::default()
+            .set_va(VirtAddr::new(PAGEBASE.as_u64()))
+            .set_len((MAX_PAGES * PGSIZE) as u64)
+            .set_pa(PAGEBASE)
+            .set_perm(PERM_R | PERM_W | PERM_BIG)
+            .map()
+            .and_then(|()| {
+                dune_procmap_iterate(__setup_mappings_cb)
+            })
 }
 
 fn setup_vdso_cb(ent: &DuneProcmapEntry) -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
-    let pa = dune_va_to_pa(ent.begin());
-    let ret = match ent.type_() {
-        ProcMapType::Vdso => Ok(PERM_U | PERM_R | PERM_X),
-        ProcMapType::Vvar => Ok(PERM_U | PERM_R),
-        _ => Err(Error::Unknown),
-    }.and_then(|perm|{
-        dune_vm_map_phys(root, ent.begin(), ent.len(), pa, perm)
-    });
-    match ret {
-        Ok(_) => Ok(()),
-        Err(Error::Unknown) => Ok(()),
-        Err(e) => Err(e),
+    match ent.type_() {
+        ProcMapType::Vdso
+        | ProcMapType::Vvar => MmapArgs::from(ent).map(),
+        _ => Ok(()),
     }
 }
 
 fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
-    // Map the entire address space
-    let va = VirtAddr::new(0);
-    let pa = PhysAddr::new(0);
-    let len = 1 << 32; // 4GB
-    let perm = PERM_R | PERM_W | PERM_X | PERM_U;
-    dune_vm_map_phys(root, va, len, pa, perm)?;
-
-    // Map the base_map region
-    let va = layout.base_map();
-    let pa = dune_mmap_addr_to_pa(va);
-    let len = GPA_MAP_SIZE as u64;
-    let perm = PERM_R | PERM_W | PERM_X | PERM_U;
-    dune_vm_map_phys(root, va, len, pa, perm)?;
-
-    // Map the base_stack region
-    let va = layout.base_stack();
-    let pa = dune_stack_addr_to_pa(va);
-    let len = GPA_STACK_SIZE as u64;
-    let perm = PERM_R | PERM_W | PERM_X | PERM_U;
-    dune_vm_map_phys(root, va, len, pa, perm)?;
-
-    // Map the page table region
-    let va = VirtAddr::new(PAGEBASE.as_u64());
-    let pa = dune_va_to_pa(va);
-    let len = (MAX_PAGES * PGSIZE) as u64;
-    let perm = PERM_R | PERM_W | PERM_BIG;
-    dune_vm_map_phys(root, va, len, pa, perm)?;
+    MmapArgs::default()
+            .set_va(VirtAddr::new(0))
+            .set_len(1 << 32)
+            .set_pa(PhysAddr::new(0))
+            .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
+            .map()?;
+    MmapArgs::default()
+            .set_va(layout.base_map())
+            .set_len(GPA_MAP_SIZE)
+            .set_pa(dune_mmap_addr_to_pa(layout.base_map()))
+            .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
+            .map()?;
+    MmapArgs::default()
+            .set_va(layout.base_stack())
+            .set_len(GPA_STACK_SIZE)
+            .set_pa(dune_stack_addr_to_pa(layout.base_stack()))
+            .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
+            .map();
+    MmapArgs::default()
+            .set_va(VirtAddr::new(PAGEBASE.as_u64()))
+            .set_len((MAX_PAGES * PGSIZE) as u64)
+            .set_pa(dune_va_to_pa(VirtAddr::new(PAGEBASE.as_u64())))
+            .set_perm(PERM_R | PERM_W | PERM_BIG)
+            .map();
 
     dune_procmap_iterate(setup_vdso_cb)?;
     setup_vsyscall()?;
