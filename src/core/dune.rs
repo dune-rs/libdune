@@ -144,39 +144,39 @@ fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<()> {
     let mut perm = PERM_NONE;
 
     // page region already mapped
-    if ent.begin == VirtAddr::new(PAGEBASE.as_u64()) {
+    if ent.begin() == VirtAddr::new(PAGEBASE.as_u64()) {
         return Ok(());
     }
 
-    if ent.begin == VSYSCALL_ADDR {
+    if ent.begin() == VSYSCALL_ADDR {
         setup_vsyscall();
         return Ok(());
     }
 
-    if ent.type_ == ProcMapType::Vdso {
-        let pa = dune_va_to_pa(ent.begin);
-        dune_vm_map_phys(root, ent.begin, ent.len(), pa, PERM_U | PERM_R | PERM_X);
+    if ent.type_() == ProcMapType::Vdso {
+        let pa = dune_va_to_pa(ent.begin());
+        dune_vm_map_phys(root, ent.begin(), ent.len(), pa, PERM_U | PERM_R | PERM_X);
         return Ok(());
     }
 
-    if ent.type_ == ProcMapType::Vvar {
-        let pa = dune_va_to_pa(ent.begin);
-        dune_vm_map_phys(root, ent.begin, ent.len(), pa, PERM_U | PERM_R);
+    if ent.type_() == ProcMapType::Vvar {
+        let pa = dune_va_to_pa(ent.begin());
+        dune_vm_map_phys(root, ent.begin(), ent.len(), pa, PERM_U | PERM_R);
         return Ok(());
     }
 
-    if ent.r {
+    if ent.r() {
         perm |= PERM_R;
     }
-    if ent.w {
+    if ent.w() {
         perm |= PERM_W;
     }
-    if ent.x {
+    if ent.x() {
         perm |= PERM_X;
     }
 
-    let pa_start = dune_va_to_pa(ent.begin);
-    dune_vm_map_phys( root, ent.begin, ent.len(), pa_start, perm)
+    let pa_start = dune_va_to_pa(ent.begin());
+    dune_vm_map_phys( root, ent.begin(), ent.len(), pa_start, perm)
 }
 
 fn __setup_mappings_precise() -> Result<()> {
@@ -192,13 +192,13 @@ fn __setup_mappings_precise() -> Result<()> {
 
 fn setup_vdso_cb(ent: &DuneProcmapEntry) -> Result<()> {
     let root = &mut *PGROOT.lock().unwrap();
-    let pa = dune_va_to_pa(ent.begin);
-    let ret = match ent.type_ {
+    let pa = dune_va_to_pa(ent.begin());
+    let ret = match ent.type_() {
         ProcMapType::Vdso => Ok(PERM_U | PERM_R | PERM_X),
         ProcMapType::Vvar => Ok(PERM_U | PERM_R),
         _ => Err(Error::Unknown),
     }.and_then(|perm|{
-        dune_vm_map_phys(root, ent.begin, ent.len(), pa, perm)
+        dune_vm_map_phys(root, ent.begin(), ent.len(), pa, perm)
     });
     match ret {
         Ok(_) => Ok(()),
@@ -267,8 +267,8 @@ pub fn setup_mappings(full: bool) -> Result<()> {
 fn map_stack_cb(e: &DuneProcmapEntry) -> Result<()> {
     let esp: u64 = rd_rsp();
     let addr = VirtAddr::new(esp);
-    if addr >= e.begin && addr < e.end {
-        unsafe { map_ptr(e.begin, e.len() as usize) };
+    if addr >= e.begin() && addr < e.end() {
+        unsafe { map_ptr(e.begin(), e.len() as usize) };
     }
     Ok(())
 }

@@ -56,7 +56,7 @@ use crate::result::{Result, Error};
  * ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
  */
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub enum ProcMapType {
     File,
     Anonymous,
@@ -91,17 +91,17 @@ impl From<String> for ProcMapType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone,Debug)]
 pub struct DuneProcmapEntry {
-    pub begin: VirtAddr,
-    pub end: VirtAddr,
-    pub r: bool,
-    pub w: bool,
-    pub x: bool,
-    pub p: bool,
-    pub offset: u64,
-    pub path: String,
-    pub type_: ProcMapType,
+    begin: VirtAddr,
+    end: VirtAddr,
+    r: bool,
+    w: bool,
+    x: bool,
+    p: bool,
+    offset: u64,
+    path: String,
+    type_: ProcMapType,
 }
 
 impl DuneProcmapEntry {
@@ -113,6 +113,7 @@ impl DuneProcmapEntry {
     funcs!(x, bool);
     funcs!(p, bool);
     funcs!(offset, u64);
+    funcs!(type_, ProcMapType);
 
     pub fn len(&self) -> u64 {
         self.end - self.begin
