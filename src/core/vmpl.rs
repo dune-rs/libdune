@@ -12,6 +12,7 @@ struct VmplDevice {
 }
 
 impl VmplDevice {
+    #[allow(dead_code)]
     pub fn new() -> Result<Self> {
         let fd = unsafe { open("/dev/vmpl".as_ptr() as *const i8,
          O_RDWR) };
@@ -24,10 +25,12 @@ impl VmplDevice {
         })
     }
 
+    #[allow(dead_code)]
     pub fn fd(&self) -> i32 {
         self.fd
     }
 
+    #[allow(dead_code)]
     pub fn close(&self) {
         unsafe { libc::close(self.fd) };
     }

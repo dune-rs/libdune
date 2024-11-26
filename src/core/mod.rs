@@ -18,8 +18,6 @@ mod idt;
 pub use crate::core::debug::*;
 #[cfg(feature = "dune")]
 pub use crate::core::dune::*;
-#[cfg(feature = "vmpl")]
-pub use crate::core::vmpl::*;
 pub use crate::core::entry::*;
 pub use crate::core::percpu::*;
 #[cfg(feature = "apic")]

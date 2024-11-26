@@ -228,6 +228,7 @@ fn first_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Optio
     None
 }
 
+#[allow(dead_code)]
 fn next_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64, last_end: &mut u64) -> Option<u64> {
     if *last_end < va_start || *last_end >= va_end {
         *last_end = va_start;
@@ -263,6 +264,7 @@ fn next_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64, last_end:
     None
 }
 
+#[allow(dead_code)]
 fn best_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Option<u64> {
     let mut best_start = None;
     let mut best_size = usize::MAX;
@@ -287,6 +289,7 @@ fn best_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Option
     best_start
 }
 
+#[allow(dead_code)]
 fn worst_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Option<u64> {
     let mut worst_start = None;
     let mut worst_size = 0;
@@ -311,6 +314,7 @@ fn worst_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Optio
     worst_start
 }
 
+#[allow(dead_code)]
 fn random_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Option<u64> {
     let mut free_blocks = find_free_blocks(vma_map, va_start, va_end);
     free_blocks.retain(|block| block.size >= size);
@@ -346,6 +350,7 @@ impl From<&str> for FitAlgorithm {
 
 type FitAlgorithmFn = fn(&VmaMap, usize, u64, u64) -> Option<u64>;
 
+#[allow(dead_code)]
 fn get_fit_algorithm(fit_algorithm: FitAlgorithm) -> FitAlgorithmFn {
     match fit_algorithm {
         FitAlgorithm::FirstFit => first_fit,
@@ -419,6 +424,7 @@ impl Default for VmplVm {
 }
 
 impl VmplVm {
+    #[allow(dead_code)]
     fn new(va_start: u64, va_end: u64) -> Self {
         Self {
             vma_map: Mutex::new(VmaMap::new()),
@@ -445,6 +451,7 @@ impl VmplVm {
         vma_map.find(end_addr)
     }
 
+    #[allow(dead_code)]
     fn find_vma_exact(&self, addr: u64) -> Option<Vma> {
         if addr < self.va_start || addr >= self.va_end {
             return None;
@@ -453,6 +460,7 @@ impl VmplVm {
         vma_map.find_exact(addr)
     }
 
+    #[allow(dead_code)]
     fn expand_vma(&self, start: u64, new_end: u64) -> bool {
         if new_end > self.va_end {
             return false;
@@ -505,6 +513,7 @@ impl VmplVm {
      * @param size The size of the VMA to allocate.
      * @return The allocated VMA if successful, None otherwise.
      */
+    #[allow(dead_code)]
     fn alloc_vma_range(&self, va_start: u64, size: usize) -> Option<Vma> {
         let vma_map = self.vma_map.lock().unwrap();
 
@@ -553,6 +562,7 @@ fn touch_vma_callback(vma: &Vma) {
     }
 }
 
+#[allow(dead_code)]
 fn associate_pkey_callback(vma: &Vma, pkey: &u64) {
     if vma.prot as i32 & (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) != 0 {
         let ret = unsafe {
@@ -571,6 +581,7 @@ fn associate_pkey_callback(vma: &Vma, pkey: &u64) {
 }
 
 impl VmplVm {
+    #[allow(dead_code)]
     fn init(&mut self, va_start: u64, va_size: usize) -> Result<(), io::Error> {
         let va_end = va_start + va_size as u64;
 
@@ -592,6 +603,7 @@ impl VmplVm {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn init_procmaps(&self) -> Result<(), io::Error> {
         // Touch each VMA in the VMA dictionary
         parse_procmaps(touch_vma_callback)?;
@@ -609,12 +621,14 @@ impl VmplVm {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn exit(&self) {
         // VMPL VMA Management
         let mut vma_map = self.vma_map.lock().unwrap();
         vma_map.clear();
     }
 
+    #[allow(dead_code)]
     fn dump(&self) {
         let vma_map = self.vma_map.lock().unwrap();
         for vma in vma_map.values() {
@@ -626,6 +640,7 @@ impl VmplVm {
         }
     }
 
+    #[allow(dead_code)]
     fn print(&self) {
         println!("VMPL-VM:");
         println!("va_start = 0x{:x}, va_end = 0x{:x}", self.va_start, self.va_end);
@@ -639,6 +654,7 @@ impl VmplVm {
         }
     }
 
+    #[allow(dead_code)]
     fn stats(&self) {
         println!("VMPL-VM Stats:");
         let vma_map = self.vma_map.lock().unwrap();
