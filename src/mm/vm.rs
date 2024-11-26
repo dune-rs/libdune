@@ -1,6 +1,6 @@
-use std::{default, ptr};
-use dune_sys::{funcs, DuneLayout};
-use libc::c_void;
+use std::{default, io, ptr};
+use dune_sys::{funcs, DuneLayout, DUNE_GET_LAYOUT, DUNE_GET_SYSCALL};
+use libc::{c_void, ioctl};
 use x86_64::structures::paging::page_table::PageTableLevel;
 use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
@@ -171,16 +171,44 @@ impl DuneLayoutI for DuneLayout {
 pub struct DuneVm {
     root: PageTable,
     layout: DuneLayout,
+    lstar: VirtAddr,
 }
 
 impl DuneVm {
 
     funcs!(layout, DuneLayout);
+    funcs!(lstar, VirtAddr);
 
     pub fn new() -> Self {
         DuneVm {
             root: PageTable::new(),
             layout: DuneLayout::default(),
+            lstar: VirtAddr::zero(),
+        }
+    }
+
+    pub fn init(&mut self, fd: i32) -> Result<()> {
+        self.get_layout(fd)?;
+        self.get_syscall(fd)?;
+        Ok(())
+    }
+
+    fn get_layout(&mut self, fd: i32) -> Result<()> {
+        let ret = unsafe { ioctl(fd, DUNE_GET_LAYOUT, self.layout) };
+        if ret != 0 {
+            Err(Error::Io(io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn get_syscall(&mut self, fd: i32) -> Result<()> {
+        let lstar = unsafe { ioctl(fd, DUNE_GET_SYSCALL) };
+        if lstar == -1 {
+            Err(Error::Io(io::Error::last_os_error()))
+        } else {
+            self.lstar = VirtAddr::new(lstar as u64);
+            Ok(())
         }
     }
 

@@ -1,6 +1,4 @@
 use std::ptr;
-use libc::c_int;
-use libc::ioctl;
 use dune_sys::*;
 use libc::mmap;
 use libc::MAP_ANON;
@@ -11,7 +9,7 @@ use libc::PROT_READ;
 use libc::PROT_WRITE;
 use x86_64::structures::paging::PageTable;
 use x86_64::structures::paging::PageTableFlags;
-use x86_64::{PhysAddr, VirtAddr};
+use x86_64::VirtAddr;
 use crate::globals::{rd_rsp, PERM_BIG, PERM_NONE, PERM_R, PERM_U, PERM_W, PERM_X};
 use crate::CreateType;
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
@@ -47,7 +45,6 @@ impl Default for MmapArgs {
         Self {
             va: VirtAddr::new(0),
             len: 0,
-            pa: PhysAddr::new(0),
             perm: 0,
         }
     }
@@ -91,12 +88,7 @@ unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
 }
 
 #[cfg(all(feature = "dune", feature = "syscall"))]
-pub fn setup_syscall(fd: c_int) -> Result<()> {
-    let lstar = unsafe { ioctl(fd, DUNE_GET_SYSCALL) };
-    if lstar == -1 {
-        return Err(Error::Unknown);
-    }
-
+pub fn setup_syscall() -> Result<()> {
     let page = unsafe { mmap(ptr::null_mut(),
                                 (PGSIZE * 2) as usize,
                                 PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -109,7 +101,8 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
     }
 
     // calculate the page-aligned address
-    let lstar = VirtAddr::new(lstar as u64);
+    let dune_vm = DUNE_VM.lock().unwrap();
+    let lstar = dune_vm.lstar();
     let lstara = lstar.align_down(align_of::<PageTable>() as u64);
     let off = lstar - lstara;
 
@@ -129,7 +122,7 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
 }
 
 #[cfg(not(feature = "syscall"))]
-pub fn setup_syscall(fd: c_int) -> Result<()> {
+pub fn setup_syscall() -> Result<()> {
     log::warn!("No syscall support");
     Ok(())
 }
@@ -215,25 +208,19 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
 }
 
 #[cfg(feature = "dune")]
-pub fn setup_mappings(fd: c_int, full: bool) -> Result<()> {
-    let layout = &mut DuneLayout::default() as *mut DuneLayout;
-    let ret = unsafe { ioctl(fd, DUNE_GET_LAYOUT, layout) };
-    if ret != 0 {
-        return Err(Error::Unknown);
-    }
-
-    let mut dune_vm = DUNE_VM.lock().unwrap();
-    dune_vm.set_layout(unsafe { *layout });
+pub fn setup_mappings(full: bool) -> Result<()> {
+    let dune_vm = DUNE_VM.lock().unwrap();
+    let layout = dune_vm.layout();
 
     if full {
-        __setup_mappings_full(unsafe { &*layout })
+        __setup_mappings_full(&layout)
     } else {
         __setup_mappings_precise()
     }
 }
 
 #[cfg(not(feature = "dune"))]
-pub fn setup_mappings(fd: c_int, full: bool) -> Result<()> {
+pub fn setup_mappings(full: bool) -> Result<()> {
     log::warn!("No dune support");
     Ok(())
 }
@@ -272,7 +259,7 @@ impl DuneSyscall for DuneDevice {
 
     #[cfg(feature = "syscall")]
     fn setup_syscall(&self) -> Result<()> {
-        setup_syscall(self.fd())
+        setup_syscall()
     }
 
     fn setup_vsyscall(&self) -> Result<()> {
@@ -280,6 +267,6 @@ impl DuneSyscall for DuneDevice {
     }
 
     fn setup_mappings(&self, full: bool) -> Result<()> {
-        setup_mappings(self.fd(), full)
+        setup_mappings(full)
     }
 }

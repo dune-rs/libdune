@@ -85,6 +85,9 @@ impl DuneRoutine for DuneDevice {
         // Initialize the Dune VM
         lazy_static::initialize(&DUNE_VM);
 
+        let mut dune_vm = DUNE_VM.lock().unwrap();
+        dune_vm.init(self.fd())?;
+
         dune_page_init()?;
         self.setup_mappings(map_full)?;
         #[cfg(feature = "syscall")]
