@@ -49,16 +49,13 @@ unsafe impl Send for PageManager {}
 
 impl PageManager {
 
-    fn new() -> Arc<Mutex<Self>> {
-        let page_base = PAGEBASE;
-        let mut pm = PageManager {
+    fn new() -> Self {
+        PageManager {
             pages: ptr::null_mut(),
             free_list: ptr::null_mut(),
-            page_base,
+            page_base: PAGEBASE,
             num_pages: 0,
-        };
-        pm.page_init().unwrap();
-        Arc::new(Mutex::new(pm))
+        }
     }
 
     fn do_mapping(&self, base: *mut libc::c_void, len: usize) -> Result<*mut libc::c_void> {
@@ -207,7 +204,9 @@ impl PageManager {
 }
 
 lazy_static! {
-    pub static ref PAGE_MANAGER: Arc<Mutex<PageManager>> = PageManager::new();
+    pub static ref PAGE_MANAGER: Arc<Mutex<PageManager>> = {
+        Arc::new(Mutex::new(PageManager::new()))
+    };
 }
 
 #[no_mangle]
@@ -221,6 +220,12 @@ pub fn dune_page_alloc() -> Result<*mut Page> {
     let mut pm = PAGE_MANAGER.lock().unwrap();
     let a= pm.page_alloc().unwrap();
     Ok(a)
+}
+
+#[no_mangle]
+pub fn dune_page_free(pg: *mut Page) {
+    let mut pm = PAGE_MANAGER.lock().unwrap();
+    pm.page_free(pg)
 }
 
 #[no_mangle]
@@ -253,4 +258,10 @@ pub fn dune_page_init() -> Result<()> {
     lazy_static::initialize(&PAGE_MANAGER);
     let mut pm = PAGE_MANAGER.lock().unwrap();
     pm.page_init()
+}
+
+#[no_mangle]
+pub fn dune_page_stats() {
+    let pm = PAGE_MANAGER.lock().unwrap();
+    pm.page_stats()
 }
