@@ -8,6 +8,7 @@ mod entry;
 mod percpu;
 #[cfg(feature = "apic")]
 mod apic;
+#[macro_use]
 mod trap;
 #[cfg(feature = "signal")]
 mod signals;

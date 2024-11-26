@@ -10,6 +10,7 @@ pub mod mm;
 pub mod fpu;
 #[cfg(feature = "syscall")]
 pub mod syscall;
+#[macro_use]
 pub mod utils;
 mod result;
 

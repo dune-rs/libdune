@@ -7,6 +7,7 @@ use crate::core::*;
 use crate::mm::*;
 use crate::utils::*;
 use crate::globals::*;
+use crate::dune_printf;
 
 use std::arch::asm;
 use std::sync::atomic::Ordering;
@@ -75,15 +76,15 @@ unsafe fn addr_is_mapped(va_start: VirtAddr) -> bool {
 unsafe extern "C" fn dune_dump_stack(tf: &DuneTf) {
     let sp = tf.rsp() ;
     let va_start = VirtAddr::new(sp);
-    dune_printf("dune: Dumping Stack Contents...");
+    dune_printf!("dune: Dumping Stack Contents...");
     for i in 0..STACK_DEPTH {
         if !addr_is_mapped(va_start) {
-            dune_printf("dune: reached unmapped addr");
+            dune_printf!("dune: reached unmapped addr");
             break;
         }
         let offset = i * std::mem::size_of::<u64>() as u64;
         let addr: *const u64 = (va_start + offset).as_ptr();
-        dune_printf("dune: RSP{:+-3} 0x{:016x}", offset, unsafe { *addr });
+        dune_printf!("dune: RSP{:+3} 0x{:016x}", offset, unsafe { *addr });
     }
 }
 
@@ -94,32 +95,32 @@ unsafe extern "C" fn dune_hexdump(x: *const u8, len: usize) {
         print!("{:02x} ", unsafe { *p });
         p = unsafe { p.add(1) };
     }
-    dune_printf("\n");
+    dune_printf!("\n");
 }
 
 #[no_mangle]
 unsafe extern "C" fn dump_ip(tf: &DuneTf) {
     let p = tf.rip() as *const u8;
     let len = 20;
-    dune_printf("dune: code before IP\t");
+    dune_printf!("dune: code before IP\t");
     dune_hexdump(unsafe { p.sub(len) }, len);
-    dune_printf("dune: code at IP\t");
+    dune_printf!("dune: code at IP\t");
     dune_hexdump(p, len);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn dune_dump_trap_frame(tf: &DuneTf) {
-    dune_printf("dune: --- Begin Trap Dump ---");
-    dune_printf("dune: RIP 0x{:016x}", tf.rip());
-    dune_printf("dune: CS 0x{:02x} SS 0x{:02x}", tf.cs() as u64, tf.ss() as u64);
-    dune_printf("dune: ERR 0x{:08x} RFLAGS 0x{:08x}", tf.err(), tf.rflags());
-    dune_printf("dune: RAX 0x{:016x} RCX 0x{:016x}", tf.rax(), tf.rcx());
-    dune_printf("dune: RDX 0x{:016x} RBX 0x{:016x}", tf.rdx(), tf.rbx());
-    dune_printf("dune: RSP 0x{:016x} RBP 0x{:016x}", tf.rsp(), tf.rbp());
-    dune_printf("dune: RSI 0x{:016x} RDI 0x{:016x}", tf.rsi(), tf.rdi());
-    dune_printf("dune: R8  0x{:016x} R9  0x{:016x}", tf.r8(), tf.r9());
-    dune_printf("dune: R10 0x{:016x} R11 0x{:016x}", tf.r10(), tf.r11());
-    dune_printf("\n");
+    dune_printf!("dune: --- Begin Trap Dump ---");
+    dune_printf!("dune: RIP 0x{:016x}", tf.rip());
+    dune_printf!("dune: CS 0x{:02x} SS 0x{:02x}", tf.cs() as u64, tf.ss() as u64);
+    dune_printf!("dune: ERR 0x{:08x} RFLAGS 0x{:08x}", tf.err(), tf.rflags());
+    dune_printf!("dune: RAX 0x{:016x} RCX 0x{:016x}", tf.rax(), tf.rcx());
+    dune_printf!("dune: RDX 0x{:016x} RBX 0x{:016x}", tf.rdx(), tf.rbx());
+    dune_printf!("dune: RSP 0x{:016x} RBP 0x{:016x}", tf.rsp(), tf.rbp());
+    dune_printf!("dune: RSI 0x{:016x} RDI 0x{:016x}", tf.rsi(), tf.rdi());
+    dune_printf!("dune: R8  0x{:016x} R9  0x{:016x}", tf.r8(), tf.r9());
+    dune_printf!("dune: R10 0x{:016x} R11 0x{:016x}", tf.r10(), tf.r11());
+    dune_printf!("\n");
 }
 
 #[allow(dead_code)]
@@ -128,7 +129,7 @@ unsafe fn dune_syscall_handler(tf: &mut DuneTf) {
     if !syscall_cb.is_null() {
         unsafe { (*syscall_cb)(tf) };
     } else {
-        dune_printf("missing handler for system call - #{}", tf.rax());
+        dune_printf!("missing handler for system call - #{}", tf.rax());
         dune_dump_trap_frame(tf);
         dune_die();
     }
@@ -148,19 +149,19 @@ pub unsafe extern "C" fn dune_trap_handler(num: usize, tf: &mut DuneTf) {
             if !pgflt_cb.is_null() {
                 unsafe { (*pgflt_cb)(read_cr2(), tf.err() as u64, tf) };
             } else {
-                dune_printf("unhandled page fault {:x} {:x}", read_cr2(), tf.err());
+                dune_printf!("unhandled page fault {:x} {:x}", read_cr2(), tf.err());
                 dune_dump_trap_frame(tf);
                 dune_procmap_dump();
                 dune_die();
             }
         }
         T_NMI | T_DBLFLT | T_GPFLT => {
-            dune_printf("fatal exception {}, code {:x} - dying...", num, tf.err());
+            dune_printf!("fatal exception {}, code {:x} - dying...", num, tf.err());
             dune_dump_trap_frame(tf);
             dune_die();
         }
         _ => {
-            dune_printf("unhandled exception {}", num);
+            dune_printf!("unhandled exception {}", num);
             dune_dump_trap_frame(tf);
             dune_die();
         }

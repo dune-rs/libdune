@@ -2,11 +2,10 @@ use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::{ptr, str};
 use libc::{sighandler_t, SIG_ERR};
-use libc::strlen;
-use libc::signal;
+use libc::{strlen,signal};
 use x86_64::VirtAddr;
-use std::arch::asm;
 use dune_sys::DuneTf;
+use std::fmt::Write;
 
 use crate::{core::*, Error};
 use crate::globals::{ARCH_GET_FS, ARCH_SET_FS};
@@ -106,21 +105,22 @@ unsafe fn dune_puts(buf: *const c_char) -> i64 {
     ret
 }
 
-/**
- * dune_printf - a raw low-level printf request that uses a hypercall directly
- * 
- * This is intended for working around libc syscall issues.
- */
-#[no_mangle]
-pub unsafe extern "C" fn dune_printf(fmt: &str, args: ...) -> i64 {
-    let mut buf = [0u8; 1024];
-    let fmt = CString::new(fmt).unwrap();
-    let fmt = fmt.as_ptr();
-    let len = libc::snprintf(buf.as_mut_ptr() as *mut c_char, buf.len(), fmt, args);
-    if len < 0 {
-        return -1;
-    }
-    dune_puts(buf.as_ptr() as *const c_char)
+pub fn __dune_printf(fmt: &str, args: std::fmt::Arguments) -> i64 {
+    let mut buffer = String::new();
+    write!(&mut buffer, "{}", args).unwrap();
+    let c_string = CString::new(buffer).unwrap();
+    unsafe { dune_puts(c_string.as_ptr()) }
+}
+
+#[allow(unused_macros)]
+#[macro_export]
+macro_rules! dune_printf {
+    ($($arg:tt)*) => {
+        __dune_printf("%s", format_args!($($arg)*))
+    };
+    () => {
+        __dune_printf(format_args!(""))
+    };
 }
 
 #[no_mangle]
