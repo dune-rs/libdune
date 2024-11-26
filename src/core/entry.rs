@@ -68,8 +68,10 @@ thread_local! {
     static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
+use crate::mm::DuneVm;
+
 lazy_static! {
-    pub static ref PGROOT: Mutex<PageTable> = Mutex::new(PageTable::new());
+    pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
     pub static ref LAYOUT: Mutex<DuneLayout> = Mutex::new(DuneLayout::default());
     pub static ref DUNE_DEVICE: Mutex<DuneDevice> = Mutex::new(DuneDevice::new().unwrap());
 }
@@ -82,14 +84,8 @@ pub trait DuneRoutine {
 
 impl DuneRoutine for DuneDevice {
     fn dune_init(&mut self, map_full: bool) -> Result<()> {
-        // Initialize the root page table
-        lazy_static::initialize(&PGROOT);
-
-        // Zero out the root page table
-        PGROOT.lock().as_deref_mut().and_then(|pgroot|{
-            pgroot.zero();
-            Ok(())
-        });
+        // Initialize the Dune VM
+        lazy_static::initialize(&DUNE_VM);
 
         dune_page_init()?;
         self.setup_mappings(map_full)?;

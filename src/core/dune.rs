@@ -12,11 +12,10 @@ use libc::PROT_WRITE;
 use x86_64::structures::paging::PageTable;
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::{PhysAddr, VirtAddr};
-use crate::dune_vm_lookup;
 use crate::globals::{rd_rsp, PERM_BIG, PERM_NONE, PERM_R, PERM_U, PERM_W, PERM_X};
 use crate::CreateType;
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
-use crate::{core::{PGROOT, *}, dune_vm_map_phys};
+use crate::core::{*};
 use crate::result::{Result, Error};
 
 trait DuneLayoutI {
@@ -110,8 +109,8 @@ impl MmapArgs {
     }
 
     pub fn map (&self) -> Result<()> {
-        let root = &mut *PGROOT.lock().unwrap();
-        dune_vm_map_phys(root, self.va, self.len, self.pa, self.perm)
+        let mut dune_vm = DUNE_VM.lock().unwrap();
+        dune_vm.map_phys(self.va, self.len, self.pa, self.perm)
     }
 }
 
@@ -150,20 +149,6 @@ impl From<&DuneProcmapEntry> for MmapArgs {
 
         Self::new(ent.begin(), ent.len(), pa, perm)
     }
-}
-
-fn dune_vm_create(
-    start: VirtAddr,
-    pa: PhysAddr,
-    flags: PageTableFlags,
-    create: CreateType
-) -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
-    dune_vm_lookup(root, start, create)
-        .and_then(|pte| {
-            pte.set_addr(pa, flags);
-            Ok(())
-        })
 }
 
 unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
@@ -211,11 +196,11 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
     }
 
     let page = VirtAddr::new(page as u64);
-    let root = &mut *PGROOT.lock().unwrap();
+    let mut dune_vm = DUNE_VM.lock().unwrap();
     for i in (0..=PGSIZE).step_by(PGSIZE) {
         let start = lstara + i as u64;
         let pa = dune_mmap_addr_to_pa(page + i as u64);
-        dune_vm_create(start, pa, PageTableFlags::PRESENT, CreateType::Normal)?;
+        dune_vm.map_page(start, pa, PageTableFlags::PRESENT, CreateType::Normal)?;
     }
 
     Ok(())
@@ -232,7 +217,8 @@ const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
 #[cfg(all(feature = "dune", feature = "syscall"))]
 fn setup_vsyscall() -> Result<()> {
     let addr = dune_va_to_pa(VSYSCALL_ADDR);
-    dune_vm_create(VSYSCALL_ADDR, addr,
+    let mut dune_vm = DUNE_VM.lock().unwrap();
+    dune_vm.map_page(VSYSCALL_ADDR, addr,
             PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
             CreateType::Normal)?;
     Ok(())

@@ -4,7 +4,7 @@ use std::{mem, ptr};
 use std::{arch::asm, mem::offset_of};
 use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, munmap, MAP_FAILED};
 use x86_64::registers::model_specific::{FsBase, GsBase};
-use dune_sys::dune::DuneConfig;
+use dune_sys::dune::{self, DuneConfig};
 use dune_sys::{funcs, funcs_vec, DuneDevice, IdtDescriptor};
 use x86_64::VirtAddr;
 use crate::{dune_die, globals::*, PGSIZE};
@@ -238,7 +238,8 @@ impl DunePercpu {
     }
 
     pub fn do_dune_enter(&mut self) -> Result<()> {
-        let root = &mut *PGROOT.lock().unwrap();
+        let mut dune_vm = DUNE_VM.lock().unwrap();
+        let root = dune_vm.get_mut_root();
 
         // map the stack into the Dune address space
         self.device.map_stack();
