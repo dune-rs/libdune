@@ -23,23 +23,22 @@ use crate::mm::DuneLayoutI;
 struct MmapArgs {
     va: VirtAddr,
     len: u64,
-    pa: PhysAddr,
     perm: i32,
 }
 
 impl MmapArgs {
     funcs!(va, VirtAddr);
     funcs!(len, u64);
-    funcs!(pa, PhysAddr);
     funcs!(perm, i32);
 
-    fn new(va: VirtAddr, len: u64, pa: PhysAddr, perm: i32) -> Self {
-        Self { va, len, pa, perm }
+    fn new(va: VirtAddr, len: u64, perm: i32) -> Self {
+        Self { va, len, perm }
     }
 
     pub fn map (&self) -> Result<()> {
         let mut dune_vm = DUNE_VM.lock().unwrap();
-        dune_vm.map_phys(self.va, self.len, self.pa, self.perm)
+        let pa = dune_vm.layout().va_to_pa(self.va);
+        dune_vm.map_phys(self.va, self.len, pa, self.perm)
     }
 }
 
@@ -57,9 +56,6 @@ impl Default for MmapArgs {
 impl From<&DuneProcmapEntry> for MmapArgs {
     fn from(ent: &DuneProcmapEntry) -> Self {
         let mut perm = PERM_NONE;
-        let dune_vm = DUNE_VM.lock().unwrap();
-        let pa = dune_vm.layout().va_to_pa(ent.begin());
-
         perm = match ent.type_() {
             ProcMapType::Vdso => PERM_U | PERM_R | PERM_X,
             ProcMapType::Vvar => PERM_U | PERM_R,
@@ -77,7 +73,7 @@ impl From<&DuneProcmapEntry> for MmapArgs {
             },
         };
 
-        Self::new(ent.begin(), ent.len(), pa, perm)
+        Self::new(ent.begin(), ent.len(), perm)
     }
 }
 
@@ -90,7 +86,6 @@ unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
     MmapArgs::default()
             .set_va(page)
             .set_len(len)
-            .set_pa(dune_vm.layout().va_to_pa(page))
             .set_perm(PERM_R | PERM_W)
             .map()
 }
@@ -126,15 +121,11 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
         );
     }
 
-    let page = VirtAddr::new(page as u64);
-    let mut dune_vm = DUNE_VM.lock().unwrap();
-    for i in (0..=PGSIZE).step_by(PGSIZE) {
-        let start = lstara + i as u64;
-        let pa = dune_vm.layout().mmap_addr_to_pa(page + i as u64);
-        dune_vm.map_page(start, pa, PageTableFlags::PRESENT, CreateType::Normal)?;
-    }
-
-    Ok(())
+    MmapArgs::default()
+            .set_va(lstara)
+            .set_len((PGSIZE * 2) as u64)
+            .set_perm(PERM_R)
+            .map()
 }
 
 #[cfg(not(feature = "syscall"))]
@@ -180,7 +171,6 @@ fn __setup_mappings_precise() -> Result<()> {
     MmapArgs::default()
             .set_va(VirtAddr::new(PAGEBASE.as_u64()))
             .set_len((MAX_PAGES * PGSIZE) as u64)
-            .set_pa(PAGEBASE)
             .set_perm(PERM_R | PERM_W | PERM_BIG)
             .map()
             .and_then(|()| {
@@ -200,25 +190,21 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
     MmapArgs::default()
             .set_va(VirtAddr::new(0))
             .set_len(1 << 32)
-            .set_pa(PhysAddr::new(0))
             .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
             .map()?;
     MmapArgs::default()
             .set_va(layout.base_map())
             .set_len(GPA_MAP_SIZE)
-            .set_pa(layout.mmap_addr_to_pa(layout.base_map()))
             .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
             .map()?;
     MmapArgs::default()
             .set_va(layout.base_stack())
             .set_len(GPA_STACK_SIZE)
-            .set_pa(layout.stack_addr_to_pa(layout.base_stack()))
             .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
             .map();
     MmapArgs::default()
             .set_va(VirtAddr::new(PAGEBASE.as_u64()))
             .set_len((MAX_PAGES * PGSIZE) as u64)
-            .set_pa(layout.va_to_pa(VirtAddr::new(PAGEBASE.as_u64())))
             .set_perm(PERM_R | PERM_W | PERM_BIG)
             .map();
 

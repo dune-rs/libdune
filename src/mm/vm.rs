@@ -143,7 +143,7 @@ impl DuneLayoutI for DuneLayout {
     fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
         let base_map = self.base_map();
         let phys_limit = self.phys_limit();
-        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - (GPA_STACK_SIZE - GPA_MAP_SIZE) as u64;
+        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - (GPA_STACK_SIZE + GPA_MAP_SIZE) as u64;
         PhysAddr::new(addr)
     }
 
