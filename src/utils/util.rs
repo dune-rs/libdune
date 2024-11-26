@@ -1,3 +1,4 @@
+use std::arch::asm;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::{ptr, str};
@@ -31,7 +32,7 @@ pub fn dune_flush_tlb_one(addr: u64) {
         asm!(
             "invlpg ({0})",
             in(reg) addr,
-            options(nostack, preserves_flags)
+            options(nostack, preserves_flags, att_syntax)
         );
     }
 }
@@ -40,8 +41,8 @@ pub fn dune_flush_tlb_one(addr: u64) {
 pub fn dune_flush_tlb() {
     unsafe {
         asm!(
-            "mov %cr3, %rax",
-            "mov %rax, %cr3",
+            "mov rax, cr3",
+            "mov cr3, rax",
             options(nostack, preserves_flags)
         );
     }
@@ -49,14 +50,14 @@ pub fn dune_flush_tlb() {
 
 pub fn load_cr3(cr3: u64) {
     unsafe {
-        asm!("mov {0}, %cr3", in(reg) cr3, options(nostack, preserves_flags));
+        asm!("mov {0}, %cr3", in(reg) cr3, options(att_syntax, nostack, preserves_flags));
     }
 }
 
 pub fn rd_rsp() -> u64 {
     let esp: u64;
     unsafe {
-        asm!("mov %rsp, {}", out(reg) esp);
+        asm!("mov %rsp, {}", out(reg) esp, options(att_syntax));
     }
     esp
 }
@@ -100,7 +101,8 @@ unsafe fn dune_puts(buf: *const c_char) -> i64 {
         "movq %rax, {2}",
         in(reg) buf,
         in(reg) strlen(buf),
-        out(reg) ret
+        out(reg) ret,
+        options(nostack,att_syntax),
     );
     ret
 }
@@ -138,8 +140,8 @@ pub unsafe extern "C" fn dune_mmap(
         "movq {0}, %rdi",
         "movq {1}, %rsi",
         "movl {2:e}, %edx",
-        "movq {3:r}, %r10",
-        "movq {4:e}, %r8",
+        "movl {3:e}, %r10d",
+        "movl {4:e}, %r8d",
         "movq {5}, %r9",
         "vmcall",
         "movq %rax, {6}",
@@ -150,6 +152,7 @@ pub unsafe extern "C" fn dune_mmap(
         in(reg) fd,
         in(reg) offset,
         out(reg) ret_addr,
+        options(nostack, att_syntax),
     );
     ret_addr
 }
@@ -160,6 +163,7 @@ pub unsafe extern "C" fn dune_die() {
         "movq $60, %rax", // exit
         "vmcall",
         out("rax") _,
+        options(nostack, att_syntax),
     );
 }
 
@@ -182,6 +186,7 @@ pub unsafe extern "C" fn dune_passthrough_syscall(tf: &mut DuneTf) {
         in(reg) tf.r8(),
         in(reg) tf.r9(),
         inout(reg) rax,
+        options(nostack, att_syntax),
     );
     tf.set_rax(rax);
 }

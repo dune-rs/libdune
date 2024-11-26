@@ -30,6 +30,7 @@ extern "C" {
 
 global_asm!(
     include_str!("dune.S"),
+    options(att_syntax),
     TMP = const TMP,
     KFS_BASE = const KFS_BASE,
     UFS_BASE = const UFS_BASE,
@@ -55,14 +56,13 @@ global_asm!(
     DUNE_CFG_R15 = const DUNE_CFG_R15,
     DUNE_CFG_RIP = const DUNE_CFG_RIP,
     DUNE_CFG_RFLAGS = const DUNE_CFG_RFLAGS,
-    DUNE_CFG_CR3 = const DUNE_CFG_CR3,
     DUNE_CFG_STATUS = const DUNE_CFG_STATUS,
-    DUNE_CFG_VCPU = const DUNE_CFG_VCPU,
     DUNE_RET_NOENTER = const DUNE_RET_NOENTER,
 );
 
 global_asm!(
     include_str!("vsyscall.S"),
+    options(att_syntax),
     __NR_gettimeofday = const libc::SYS_gettimeofday,
     __NR_time = const libc::SYS_time,
     __NR_getcpu = const libc::SYS_getcpu,

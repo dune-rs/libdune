@@ -7,7 +7,7 @@ __dune_vsyscall_page:
 	/* handle gettimeofday() */
 	mov %cs, %rax
 	test $3, %rax
-	mov $__NR_gettimeofday, %rax
+	mov ${__NR_gettimeofday}, %rax
 	jnz 1f
 	vmcall
 	ret
@@ -19,7 +19,7 @@ __dune_vsyscall_page:
 	.balign 1024, 0xcc
 	mov %cs, %rax
 	test $3, %rax
-	mov $__NR_time, %rax
+	mov ${__NR_time}, %rax
 	jnz 2f
 	vmcall
 	ret
@@ -31,7 +31,7 @@ __dune_vsyscall_page:
 	.balign 1024, 0xcc
 	mov %cs, %rax
 	test $3, %rax
-	mov $__NR_getcpu, %rax
+	mov ${__NR_getcpu}, %rax
 	jnz 3f
 	vmcall
 	ret

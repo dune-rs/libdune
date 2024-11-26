@@ -132,9 +132,9 @@
  * NOTE: clobbers %rax, %rdx, and %rcx
  */
 	.macro SET_G0_FS_BASE
-	movq	$0, %gs:IN_USERMODE
-	movq	%gs:KFS_BASE, %rax
-	movq	%gs:UFS_BASE, %rdx
+	movq	$0, %gs:{IN_USERMODE}
+	movq	%gs:{KFS_BASE}, %rax
+	movq	%gs:{UFS_BASE}, %rdx
 	cmp	%rax, %rdx
 	je	1f
 #if USE_RDWRGSFS
@@ -154,9 +154,9 @@
  * NOTE: clobbers %rax, %rdx, and %rcx
  */
 	.macro SET_G3_FS_BASE
-	movq	$1, %gs:IN_USERMODE
-	movq	%gs:UFS_BASE, %rax
-	movq	%gs:KFS_BASE, %rdx
+	movq	$1, %gs:{IN_USERMODE}
+	movq	%gs:{UFS_BASE}, %rax
+	movq	%gs:{KFS_BASE}, %rdx
 	cmp	%rax, %rdx
 	je	1f
 #if USE_RDWRGSFS
@@ -178,7 +178,7 @@ __dune_enter:
 	SAVE_REST
 	movq	%rsp, DUNE_CFG_RSP(%rsi)
 	movq	%rsi, %rdx
-	movq	$IOCTL_DUNE_ENTER, %rsi
+	movq	${IOCTL_DUNE_ENTER}, %rsi
 	movq	$16, %rax /* __NR_ioctl */
 	syscall
 
@@ -201,13 +201,13 @@ __dune_retry:
 __dune_reenter:
 	movq	%r12, %rdi
 	movq	%r13, %rdx
-	movq	$IOCTL_DUNE_ENTER, %rsi
+	movq	${IOCTL_DUNE_ENTER}, %rsi
 	movq	$16, %rax /* __NR_ioctl */
 	syscall
 	cmpq	$0, %rax
 	jz	__dune_retry
-	movq	%rax, DUNE_CFG_STATUS(%r13)
-	movq	$DUNE_RET_NOENTER, DUNE_CFG_RET(%r13)
+	movq	%rax, {DUNE_CFG_STATUS}(%r13)
+	movq	${DUNE_RET_NOENTER}, {DUNE_CFG_RET}(%r13)
 	jmp	__dune_retry
 
 /* __dune_ret is the location of the first instruction executed in Dune mode */
@@ -224,29 +224,29 @@ __dune_ret_fail:
 
 .globl __dune_go_linux
 __dune_go_linux:
-	movq DUNE_CFG_RCX(%rdi), %rcx
-	movq DUNE_CFG_RBX(%rdi), %rbx
-	movq DUNE_CFG_RDX(%rdi), %rdx
-	movq DUNE_CFG_RBP(%rdi), %rbp
-	movq DUNE_CFG_RSI(%rdi), %rsi
-	movq DUNE_CFG_R8 (%rdi), %r8
-	movq DUNE_CFG_R9 (%rdi), %r9
-	movq DUNE_CFG_R10(%rdi), %r10
-	movq DUNE_CFG_R11(%rdi), %r11
-	movq DUNE_CFG_R12(%rdi), %r12
-	movq DUNE_CFG_R13(%rdi), %r13
-	movq DUNE_CFG_R14(%rdi), %r14
-	movq DUNE_CFG_R15(%rdi), %r15
+	movq {DUNE_CFG_RCX}(%rdi), %rcx
+	movq {DUNE_CFG_RBX}(%rdi), %rbx
+	movq {DUNE_CFG_RDX}(%rdi), %rdx
+	movq {DUNE_CFG_RBP}(%rdi), %rbp
+	movq {DUNE_CFG_RSI}(%rdi), %rsi
+	movq {DUNE_CFG_R8 }(%rdi), %r8
+	movq {DUNE_CFG_R9 }(%rdi), %r9
+	movq {DUNE_CFG_R10}(%rdi), %r10
+	movq {DUNE_CFG_R11}(%rdi), %r11
+	movq {DUNE_CFG_R12}(%rdi), %r12
+	movq {DUNE_CFG_R13}(%rdi), %r13
+	movq {DUNE_CFG_R14}(%rdi), %r14
+	movq {DUNE_CFG_R15}(%rdi), %r15
 	mov %ss, %rax
 	push %rax
-	pushq DUNE_CFG_RSP(%rdi)
-	pushq DUNE_CFG_RFLAGS(%rdi)
+	pushq {DUNE_CFG_RSP}(%rdi)
+	pushq {DUNE_CFG_RFLAGS}(%rdi)
 	mov %cs, %rax
 	push %rax
-	pushq DUNE_CFG_RIP(%rdi)
-	pushq DUNE_CFG_RFLAGS(%rdi)
-	movq DUNE_CFG_RAX(%rdi), %rax
-	movq DUNE_CFG_RDI(%rdi), %rdi
+	pushq {DUNE_CFG_RIP}(%rdi)
+	pushq {DUNE_CFG_RFLAGS}(%rdi)
+	movq {DUNE_CFG_RAX}(%rdi), %rax
+	movq {DUNE_CFG_RDI}(%rdi), %rdi
 	/* We are restoring the flags here, so that RFLAGS.TF is set when IRETQ is
 	 * executed, so that an INT 1 will be raised _before_ executing the
 	 * instruction at CS:RIP we are jumping to. */
@@ -280,7 +280,7 @@ __dune_go_dune:
 .globl __dune_syscall
 __dune_syscall:
 	/* handle system calls from G0 */
-	testq $1, %gs:IN_USERMODE
+	testq $1, %gs:{IN_USERMODE}
 	jnz 1f
 	pushq	%r11
 	popfq
@@ -289,8 +289,8 @@ __dune_syscall:
 
 1:
 	/* first switch to the kernel stack */
-	movq	%rsp, %gs:TMP
-	movq	%gs:TRAP_STACK, %rsp
+	movq	%rsp, %gs:{TMP}
+	movq	%gs:{TRAP_STACK}, %rsp
 
 	/* now push the trap frame onto the stack */
 	subq	$TF_END, %rsp
@@ -298,7 +298,7 @@ __dune_syscall:
 	movq	%r11, RFLAGS(%rsp)
 	movq	%r10, RCX(%rsp) /* fixup to standard 64-bit calling ABI */
 	SAVE_REGS 0, 1
-	movq	%gs:TMP, %rax
+	movq	%gs:{TMP}, %rax
 	movq	%rax, RSP(%rsp)
 
 	/* then restore the CPL0 FS base address */
@@ -350,7 +350,7 @@ dune_jump_to_user:
 	popq	RFLAGS(%rsp)
 
 	/* save the stack pointer */
-	movq	%rsp, %gs:TRAP_STACK
+	movq	%rsp, %gs:{TRAP_STACK}
 
 	/* set the CPL 3 FS.base */
 	SET_G3_FS_BASE
@@ -364,7 +364,7 @@ dune_jump_to_user:
 dune_ret_from_user:
 	/* restore the G0 stack */
 	movq	%rdi, %rsi
-	movq	%gs:TRAP_STACK, %rdi
+	movq	%gs:{TRAP_STACK}, %rdi
 
 	/* return code */
 	movq	%rsi, RAX(%rdi)

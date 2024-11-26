@@ -179,20 +179,20 @@ impl DunePercpu {
                 // STEP 1: load the new GDT
                 "lgdt [{0}]",
                 // STEP 2: initialize data segments
-                "mov {1:x}, %ax",
-                "mov %ax, %ds",
-                "mov %ax, %es",
-                "mov %ax, %ss",
+                "mov ax, {1:x}",
+                "mov ds, ax",
+                "mov es, ax",
+                "mov ss, ax",
                 // STEP 3: long jump into the new code segment
-                "mov {2:x}, %rax",
-                "pushq %rax",
-                "pushq $1f",
-                "lretq",
-                "1:",
+                "mov rax, {2}",
+                "push rax",
+                "push 2f",
+                "retfq",
+                "2:",
                 "nop",
                 // STEP 4: load the task register (for safe stack switching)
-                "mov {3:x}, %ax",
-                "ltr %ax",
+                "mov ax, {3:x}",
+                "ltr ax",
                 // STEP 5: load the new IDT and enable interrupts
                 "lidt [{4}]",
                 "sti",
@@ -258,7 +258,7 @@ pub fn dune_get_user_fs() -> u64 {
     let ptr: u64;
     unsafe {
         asm!(
-            "movq %gs:{ufs_base}, {ptr}",
+            "mov gs:{ufs_base}, {ptr}",
             ufs_base = const offset_of!(DunePercpu, ufs_base),
             ptr = out(reg) ptr,
             options(nostack, preserves_flags)
@@ -270,7 +270,7 @@ pub fn dune_get_user_fs() -> u64 {
 pub fn dune_set_user_fs(fs_base: u64) {
     unsafe {
         asm!(
-            "movq {fs_base}, %gs:{ufs_base}",
+            "mov {fs_base}, gs:{ufs_base}",
             fs_base = in(reg) fs_base,
             ufs_base = const offset_of!(DunePercpu, ufs_base),
             options(nostack, preserves_flags)
