@@ -1,9 +1,7 @@
-#[macro_use]
 use std::ptr;
 use std::mem;
 use std::sync::Arc;
 use std::sync::Mutex;
-use libc::MAP_ANON;
 use libc::{mmap, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_HUGETLB, PROT_READ, PROT_WRITE};
 use x86_64::PhysAddr;
 use lazy_static::lazy_static;
@@ -243,4 +241,10 @@ pub fn dune_page2pa(page: *mut Page) -> PhysAddr {
     let pm = PAGE_MANAGER.lock().unwrap();
     let addr = pm.page2pa(page);
     PhysAddr::new(addr as u64)
+}
+
+pub fn dune_page_init() -> Result<()> {
+    lazy_static::initialize(&PAGE_MANAGER);
+    let mut pm = PAGE_MANAGER.lock().unwrap();
+    pm.page_init()
 }

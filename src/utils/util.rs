@@ -59,9 +59,9 @@ pub unsafe extern "C" fn dune_mmap(
         "movq $9, %rax", // SYS_mmap
         "movq {0}, %rdi",
         "movq {1}, %rsi",
-        "movl {2}, %edx",
-        "movq {3}, %r10",
-        "movq {4}, %r8",
+        "movl {2:e}, %edx",
+        "movq {3:r}, %r10",
+        "movq {4:e}, %r8",
         "movq {5}, %r9",
         "vmcall",
         "movq %rax, {6}",

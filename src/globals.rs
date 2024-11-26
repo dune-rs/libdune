@@ -1,5 +1,4 @@
 use std::{arch::asm, u64};
-use libc::c_void;
 use x86_64::VirtAddr;
 
 pub const NPTBITS: i32 = 9; // log2(NPageTableEntryRIES)

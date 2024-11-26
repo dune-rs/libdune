@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::fmt::Display;
-use std::str::FromStr;
 
 use dune_sys::funcs;
 use x86_64::VirtAddr;

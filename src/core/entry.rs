@@ -2,7 +2,6 @@ use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
-use libc::{open, O_RDWR};
 use x86_64::structures::paging::PageTable;
 use lazy_static::lazy_static;
 use core::arch::global_asm;

@@ -1,6 +1,3 @@
-use std::mem;
-use std::io;
-use std::ops::BitAnd;
 use std::ptr;
 use libc::c_int;
 use libc::ioctl;
@@ -12,7 +9,6 @@ use libc::MAP_PRIVATE;
 use libc::PROT_EXEC;
 use libc::PROT_READ;
 use libc::PROT_WRITE;
-use x86_64::structures::paging::page_table::PageTableEntry;
 use x86_64::structures::paging::PageTable;
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::{PhysAddr, VirtAddr};
@@ -239,6 +235,7 @@ fn setup_vsyscall() -> Result<()> {
     dune_vm_create(VSYSCALL_ADDR, addr,
             PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
             CreateType::Normal)?;
+    Ok(())
 }
 
 #[cfg(not(feature = "dune"))]
