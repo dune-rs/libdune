@@ -186,11 +186,12 @@ impl PageManager {
         }
     }
 
-    fn page2pa(&self, page: *mut Page) -> usize {
+    fn page2pa(&self, page: *mut Page) -> PhysAddr {
         println!("sizeof Page: {}", std::mem::size_of::<Page>());
-        (unsafe {
+        let pa = (unsafe {
             page.offset_from(self.pages)
-        }) as usize * PAGE_SIZE + self.page_base.as_u64() as usize
+        }) as usize * PAGE_SIZE + self.page_base.as_u64() as usize;
+        PhysAddr::new(pa as u64)
     }
 
     fn pa2page(&self, pa: PhysAddr) -> *mut Page {
@@ -249,8 +250,7 @@ pub fn dune_pa2page(pa: PhysAddr) -> *mut Page {
 #[no_mangle]
 pub fn dune_page2pa(page: *mut Page) -> PhysAddr {
     let pm = PAGE_MANAGER.lock().unwrap();
-    let addr = pm.page2pa(page);
-    PhysAddr::new(addr as u64)
+    pm.page2pa(page)
 }
 
 #[no_mangle]
