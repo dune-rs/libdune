@@ -210,14 +210,13 @@ lazy_static! {
     pub static ref PAGE_MANAGER: Arc<Mutex<PageManager>> = PageManager::new();
 }
 
+#[no_mangle]
 pub fn dune_page_isfrompool(pa: PhysAddr) -> bool {
     let pm = PAGE_MANAGER.lock().unwrap();
     pm.page_isfrompool(pa)
 }
 
-use crate::Error;
-use crate::Result;
-
+#[no_mangle]
 pub fn dune_page_alloc() -> Result<*mut Page> {
     let mut pm = PAGE_MANAGER.lock().unwrap();
     let a= pm.page_alloc().unwrap();

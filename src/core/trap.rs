@@ -151,7 +151,7 @@ pub unsafe extern "C" fn dune_trap_handler(num: usize, tf: &mut DuneTf) {
             } else {
                 dune_printf!("unhandled page fault {:x} {:x}", read_cr2(), tf.err());
                 dune_dump_trap_frame(tf);
-                dune_procmap_dump();
+                let _ = dune_procmap_dump();
                 dune_die();
             }
         }
