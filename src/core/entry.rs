@@ -70,7 +70,6 @@ thread_local! {
 
 lazy_static! {
     pub static ref PGROOT: Mutex<PageTable> = Mutex::new(PageTable::new());
-    pub static ref DUNE_FD: Mutex<i32> = Mutex::new(0);
     pub static ref LAYOUT: Mutex<DuneLayout> = Mutex::new(DuneLayout::default());
     pub static ref DUNE_DEVICE: Mutex<DuneDevice> = Mutex::new(DuneDevice::new().unwrap());
 }

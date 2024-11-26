@@ -48,12 +48,10 @@ impl DuneDebug for DuneDevice {
                 .set_regs_size(mem::size_of::<DuneTrapRegs>() as u64)
                 .set_priv_data(priv_data);
 
-        // let dune_fd = *DUNE_FD.lock().unwrap();
         unsafe { ioctl(self.fd(), DUNE_TRAP_ENABLE, &trap_conf) };
     }
 
     fn trap_disable(&self) {
-        // let dune_fd = *DUNE_FD.lock().unwrap();
         unsafe { ioctl(self.fd(), DUNE_TRAP_DISABLE) };
     }
 
