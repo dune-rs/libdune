@@ -190,7 +190,7 @@ impl PageManager {
         println!("sizeof Page: {}", std::mem::size_of::<Page>());
         (unsafe {
             page.offset_from(self.pages)
-        }) as usize * PAGE_SIZE
+        }) as usize * PAGE_SIZE + self.page_base.as_u64() as usize
     }
 
     fn pa2page(&self, pa: PhysAddr) -> *mut Page {

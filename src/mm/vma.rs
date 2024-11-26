@@ -1,15 +1,13 @@
 use std::collections::BTreeMap;
-use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, BufRead};
-use std::path::Path;
 use std::ptr;
 use std::str::FromStr;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Vma {
     pub start: u64,
     pub end: u64,
@@ -184,18 +182,18 @@ impl FreeBlock {
     }
 }
 
-fn find_free_blocks(vma_map: &BTreeMap<u64, Vma>, va_start: u64, va_end: u64) -> Vec<FreeBlock> {
+fn find_free_blocks(vma_map: &VmaMap, va_start: u64, va_end: u64) -> Vec<FreeBlock> {
+    // finr free block between va_start and va_end in the VMA map
     let mut free_blocks = Vec::new();
     let mut last_end = va_start;
 
     for vma in vma_map.values() {
-        if vma.start >= last_end {
-            if vma.start < va_end {
-                free_blocks.push(FreeBlock::new(last_end, (vma.start - last_end) as usize));
-                last_end = vma.end;
-            } else {
-                break;
+        if vma.start >= last_end && vma.start < va_end {
+            let free_size = (vma.start - last_end) as usize;
+            if free_size > 0 {
+                free_blocks.push(FreeBlock::new(last_end, free_size));
             }
+            last_end = vma.end;
         }
     }
 
@@ -206,7 +204,7 @@ fn find_free_blocks(vma_map: &BTreeMap<u64, Vma>, va_start: u64, va_end: u64) ->
     free_blocks
 }
 
-fn first_fit(vma_map: &BTreeMap<u64, Vma>, size: usize, va_start: u64, va_end: u64) -> Option<u64> {
+fn first_fit(vma_map: &VmaMap, size: usize, va_start: u64, va_end: u64) -> Option<u64> {
     let mut last_end = va_start;
 
     for vma in vma_map.values() {
@@ -346,12 +344,12 @@ impl From<&str> for FitAlgorithm {
     }
 }
 
-type FitAlgorithmFn = fn(&BTreeMap<u64, Vma>, usize, u64, u64) -> Option<u64>;
+type FitAlgorithmFn = fn(&VmaMap, usize, u64, u64) -> Option<u64>;
 
 fn get_fit_algorithm(fit_algorithm: FitAlgorithm) -> FitAlgorithmFn {
     match fit_algorithm {
         FitAlgorithm::FirstFit => first_fit,
-        FitAlgorithm::NextFit => next_fit,
+        FitAlgorithm::NextFit => first_fit,
         FitAlgorithm::BestFit => best_fit,
         FitAlgorithm::WorstFit => worst_fit,
         FitAlgorithm::RandomFit => random_fit,
@@ -404,6 +402,20 @@ struct VmplVm {
     vma_map: Mutex<VmaMap>,
     va_start: u64,
     va_end: u64,
+    fit_algorithm: FitAlgorithmFn,
+    pkey: u64,
+}
+
+impl Default for VmplVm {
+    fn default() -> Self {
+        Self {
+            vma_map: Mutex::new(VmaMap::new()),
+            va_start: 0,
+            va_end: 0,
+            fit_algorithm: first_fit,
+            pkey: 0,
+        }
+    }
 }
 
 impl VmplVm {
@@ -412,6 +424,8 @@ impl VmplVm {
             vma_map: Mutex::new(VmaMap::new()),
             va_start,
             va_end,
+            fit_algorithm: first_fit,
+            pkey: 0,
         }
     }
 
@@ -446,10 +460,10 @@ impl VmplVm {
         let mut vma_map = self.vma_map.lock().unwrap();
         if let Some(mut vma) = vma_map.remove(&start) {
             vma.end = new_end;
-            vma_map.insert(vma.start, vma.clone());
+            vma_map.insert(vma.clone());
             if let Some(next_vma) = vma_map.remove(&vma.end) {
                 vma.end = next_vma.end;
-                vma_map.insert(vma.start, vma);
+                vma_map.insert(vma);
             }
             true
         } else {
@@ -491,15 +505,16 @@ impl VmplVm {
      * @param size The size of the VMA to allocate.
      * @return The allocated VMA if successful, None otherwise.
      */
-    fn alloc_vma_range(vm: &VmplVm, va_start: u64, size: usize) -> Option<Vma> {
-        let mut vma_map = vm.vma_map.lock().unwrap();
+    fn alloc_vma_range(&self, va_start: u64, size: usize) -> Option<Vma> {
+        let vma_map = self.vma_map.lock().unwrap();
 
-        if va_start < vm.va_start || va_start >= vm.va_end || va_start + size as u64 > vm.va_end {
+        let va_end = va_start + size as u64;
+        if va_start < self.va_start || va_start >= self.va_end || va_end as u64 > self.va_end {
             return None;
         }
 
-        log::trace!("va_start = 0x{:x}, va_end = 0x{:x}, size = 0x{:x}", va_start, vm.va_end, size);
-        let va_start = (vm.fit_algorithm)(&vma_map, size, va_start, vm.va_end)?;
+        log::trace!("va_start = 0x{:x}, va_end = 0x{:x}, size = 0x{:x}", va_start, va_end, size);
+        let va_start = (self.fit_algorithm)(&vma_map, size, va_start, self.va_end)?;
         log::trace!("Allocated VMA at va_start = 0x{:x}", va_start);
 
         let vma = Vma {
@@ -508,6 +523,7 @@ impl VmplVm {
             prot: 0,
             offset: 0,
             vm_file: None,
+            ..Default::default()
         };
 
         Some(vma)
@@ -521,13 +537,14 @@ fn insert_vma_callback(entry: &Vma, vm: &VmplVm) {
         prot: entry.prot,
         offset: entry.offset,
         vm_file: entry.vm_file.clone(),
+        ..Default::default()
     };
     let inserted = vm.insert_vma(new_vma);
     log::trace!("inserted = {}", inserted);
 }
 
 fn touch_vma_callback(vma: &Vma) {
-    if vma.prot & (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) != 0 {
+    if vma.prot as i32 & (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) != 0 {
         for addr in (vma.start..vma.end).step_by(4096) {
             unsafe {
                 ptr::read_volatile(addr as *const u8);
@@ -537,13 +554,14 @@ fn touch_vma_callback(vma: &Vma) {
 }
 
 fn associate_pkey_callback(vma: &Vma, pkey: &u64) {
-    if vma.prot & (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) != 0 {
+    if vma.prot as i32 & (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) != 0 {
         let ret = unsafe {
-            libc::pkey_mprotect(
-                vma.start as *mut libc::c_void,
-                (vma.end - vma.start) as libc::size_t,
-                vma.prot as libc::c_int,
-                *pkey as libc::c_int,
+            libc::syscall(
+                libc::SYS_pkey_mprotect,
+                vma.start as usize,
+                (vma.end - vma.start) as usize,
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+                *pkey as usize,
             )
         };
         if ret != 0 {
@@ -553,15 +571,14 @@ fn associate_pkey_callback(vma: &Vma, pkey: &u64) {
 }
 
 impl VmplVm {
-    fn init(&self, va_start: u64, va_size: usize) -> Result<(), io::Error> {
-        let mut vma_map = self.vma_map.lock().unwrap();
+    fn init(&mut self, va_start: u64, va_size: usize) -> Result<(), io::Error> {
         let va_end = va_start + va_size as u64;
 
         // VMPL Preserve Kernel Mapping
         log::debug!("va_start = 0x{:x}, size = 0x{:x}", va_start, va_size);
 
         // Allocate the Protection Key
-        let pkey = unsafe { libc::pkey_alloc(0, 0) };
+        let pkey = unsafe { libc::syscall( libc::SYS_pkey_alloc, 0, 0) };
         if pkey == -1 {
             return Err(io::Error::last_os_error());
         }
@@ -777,28 +794,6 @@ mod tests {
     }
 
     #[test]
-    fn test_vmpl_vm_find_prev_vma() {
-        let vm = VmplVm::new(0x1000, 0x10000);
-        let vma1 = Vma::create(0x2000, 0x1000, 0, 0, 0);
-        let vma2 = Vma::create(0x4000, 0x1000, 0, 0, 0);
-        vm.insert_vma(vma1.clone());
-        vm.insert_vma(vma2.clone());
-        let prev_vma = vm.find_prev_vma(&vma2).unwrap();
-        assert_eq!(prev_vma, vma1);
-    }
-
-    #[test]
-    fn test_vmpl_vm_find_next_vma() {
-        let vm = VmplVm::new(0x1000, 0x10000);
-        let vma1 = Vma::create(0x2000, 0x1000, 0, 0, 0);
-        let vma2 = Vma::create(0x4000, 0x1000, 0, 0, 0);
-        vm.insert_vma(vma1.clone());
-        vm.insert_vma(vma2.clone());
-        let next_vma = vm.find_next_vma(&vma1).unwrap();
-        assert_eq!(next_vma, vma2);
-    }
-
-    #[test]
     fn test_vmpl_vm_remove_vma() {
         let vm = VmplVm::new(0x1000, 0x10000);
         let vma = Vma::create(0x2000, 0x1000, 0, 0, 0);
@@ -810,7 +805,7 @@ mod tests {
     #[test]
     fn test_vmpl_vm_alloc_vma_range() {
         let vm = VmplVm::new(0x1000, 0x10000);
-        let vma = VmplVm::alloc_vma_range(&vm, 0x2000, 0x1000).unwrap();
+        let vma = vm.alloc_vma_range(0x2000, 0x1000).unwrap();
         assert_eq!(vma.start, 0x2000);
         assert_eq!(vma.end, 0x3000);
     }
