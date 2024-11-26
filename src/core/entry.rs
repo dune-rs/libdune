@@ -1,13 +1,12 @@
 use std::ffi::{c_int, c_void};
-use std::io::{self, ErrorKind};
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use lazy_static::lazy_static;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, *};
-use crate::{core::*, dune_page_init};
+use crate::{core::*, dune_page_init, Error};
 use crate::syscall::DuneSyscall;
-use crate::result::{Result, Error};
+use crate::result::Result;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -87,6 +86,7 @@ pub trait DuneRoutine {
 
 impl DuneRoutine for DuneDevice {
     fn dune_init(&mut self, map_full: bool) -> Result<()> {
+        self.open().map_err(|e| Error::LibcError(e))?;
         // Initialize the Dune VM
         lazy_static::initialize(&DUNE_VM);
 
@@ -191,10 +191,9 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
     match dune_device.dune_init(map_full) {
         Ok(_) => 0,
         Err(e) => {
-            let r = Error::Io(io::Error::new(ErrorKind::Other, format!("dune_init() {}", e)));
-            log::error!("{:?}", r);
+            log::error!("dune_init() {}", e);
             let _ = dune_device.close();
-            -1
+            libc::EXIT_FAILURE
         }
     }
 }
@@ -210,7 +209,7 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_enter() -> c_int {
+pub extern "C" fn dune_enter() -> c_int {
     let mut dune_device = DUNE_DEVICE.lock().unwrap();
     match dune_device.dune_enter() {
         Ok(_) => 0,
@@ -228,15 +227,13 @@ pub unsafe extern "C" fn dune_enter() -> c_int {
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_init_and_enter() -> c_int {
-    let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    if dune_device.dune_init(true).is_err() {
-        return -1;
+pub extern "C" fn dune_init_and_enter() -> c_int {
+    let ret= dune_init(true);
+    if ret != 0 {
+        return ret;
     }
-    if dune_device.dune_enter().is_err() {
-        return -1;
-    }
-    0
+
+	return dune_enter();
 }
 
 /**

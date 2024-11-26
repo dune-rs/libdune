@@ -4,6 +4,7 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::{ptr, str};
 use libc::{sighandler_t, SIG_ERR};
 use libc::{strlen,signal};
+use nix::errno::Errno;
 use x86_64::VirtAddr;
 use dune_sys::DuneTf;
 use std::fmt::Write;
@@ -69,7 +70,7 @@ pub fn get_fs_base() -> Result<VirtAddr> {
         let ret = arch_prctl(ARCH_GET_FS, &mut fs_base as *mut u64 as *mut c_void);
         if ret == -1 {
             eprintln!("dune: failed to get FS register");
-            return Err(Error::LibcError(libc::EIO));
+            return Err(Error::LibcError(Errno::EIO));
         }
     }
 

@@ -1,9 +1,10 @@
 use std::{fmt, io::ErrorKind};
 use libc::c_int;
+use nix::errno::Errno;
 
 #[derive(Debug)]
 pub enum Error {
-    LibcError(c_int),
+    LibcError(Errno),
     Io(std::io::Error),
     InvalidInput(String),
     NotFound,
@@ -37,7 +38,7 @@ impl From<c_int> for Error {
             libc::EEXIST => Error::InvalidInput("File already exists".to_string()),
             libc::EINVAL => Error::InvalidInput("Invalid input".to_string()),
             libc::ERANGE => Error::InvalidInput("Out of range".to_string()),
-            _ => Error::LibcError(err),
+            _ => Error::LibcError(Errno::from_raw(err)),
         }
     }
 }

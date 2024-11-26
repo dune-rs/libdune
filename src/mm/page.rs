@@ -3,6 +3,7 @@ use std::mem;
 use std::sync::Arc;
 use std::sync::Mutex;
 use libc::{mmap, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_HUGETLB, PROT_READ, PROT_WRITE};
+use nix::errno::Errno;
 use x86_64::PhysAddr;
 use lazy_static::lazy_static;
 use dune_sys::*;
@@ -67,7 +68,7 @@ impl PageManager {
                 mmap(base, len, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
             };
             if mem == libc::MAP_FAILED {
-                return Err(Error::LibcError(libc::ENOMEM));
+                return Err(Error::LibcError(Errno::ENOMEM));
             }
         }
         Ok(mem)
@@ -84,7 +85,7 @@ impl PageManager {
             let pages = libc::malloc(mem::size_of::<Page>() * MAX_PAGES) as *mut Page;
             if pages.is_null() {
                 libc::munmap(base, self.num_pages * PGSIZE);
-                return Err(Error::LibcError(libc::ENOMEM));
+                return Err(Error::LibcError(Errno::ENOMEM));
             }
             pages
         };

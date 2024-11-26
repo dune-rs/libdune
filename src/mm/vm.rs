@@ -1,6 +1,7 @@
 use std::{default, io, ptr};
 use dune_sys::{funcs, DuneLayout, DUNE_GET_LAYOUT, DUNE_GET_SYSCALL};
 use libc::{c_void, ioctl};
+use nix::errno::Errno;
 use x86_64::structures::paging::page_table::PageTableLevel;
 use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
@@ -395,7 +396,7 @@ impl DuneVm {
         let pdpte = &mut pdpt[j];
         let pd = if !pdpte.flags().contains(PageTableFlags::PRESENT) {
             if create == CreateType::None {
-                return Err(Error::LibcError(libc::ENOENT));
+                return Err(Error::LibcError(Errno::ENOENT));
             }
 
             let pdep = alloc_page()
@@ -421,7 +422,7 @@ impl DuneVm {
         let pde = &mut pd[k];
         let pte = if !pte_present(pde) {
             if create == CreateType::None {
-                return Err(Error::LibcError(libc::ENOENT));
+                return Err(Error::LibcError(Errno::ENOENT));
             }
 
             let ptep = alloc_page()
