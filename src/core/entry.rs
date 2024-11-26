@@ -93,8 +93,10 @@ impl DuneRoutine for DuneDevice {
 
         dune_page_init()?;
         self.setup_mappings(map_full)?;
+        #[cfg(feature = "syscall")]
         self.setup_syscall()?;
 
+        #[cfg(feature = "signal")]
         self.setup_signals()?;
 
         self.setup_idt();
@@ -147,6 +149,7 @@ impl DuneRoutine for DuneDevice {
                 println!("dune: exit due to EPT violation");
             },
             DuneRetCode::Interrupt => {
+                #[cfg(feature = "debug")]
                 self.handle_int(conf_);
                 println!("dune: exit due to interrupt {}", conf.status());
             },

@@ -5,8 +5,9 @@ edition = "2021"
 build = "build.rs"
 
 [features]
-default = ["dune"]
+default = ["dune", "signal", "debug"]
 test = []
+signal = []
 syscall = []
 debug = []
 apic = []

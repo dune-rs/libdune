@@ -179,7 +179,7 @@ unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
             .map()
 }
 
-#[cfg(feature = "dune")]
+#[cfg(all(feature = "dune", feature = "syscall"))]
 pub fn setup_syscall(fd: c_int) -> Result<()> {
     let lstar = unsafe { ioctl(fd, DUNE_GET_SYSCALL) };
     if lstar == -1 {
@@ -221,7 +221,7 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "dune"))]
+#[cfg(not(feature = "syscall"))]
 pub fn setup_syscall(fd: c_int) -> Result<()> {
     log::warn!("No syscall support");
     Ok(())
@@ -229,7 +229,7 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
 
 const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
 
-#[cfg(feature = "dune")]
+#[cfg(all(feature = "dune", feature = "syscall"))]
 fn setup_vsyscall() -> Result<()> {
     let addr = dune_va_to_pa(VSYSCALL_ADDR);
     dune_vm_create(VSYSCALL_ADDR, addr,
@@ -238,7 +238,7 @@ fn setup_vsyscall() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "dune"))]
+#[cfg(not(feature = "syscall"))]
 fn setup_vsyscall() -> Result<()> {
     log::warn!("No vsyscall support");
     Ok(())
@@ -351,6 +351,7 @@ fn map_stack() -> Result<()> {
 pub trait DuneSyscall {
     fn map_ptr(&self, p: VirtAddr, len: usize) -> Result<()>;
     fn map_stack(&self) -> Result<()>;
+    #[cfg(feature = "syscall")]
     fn setup_syscall(&self) -> Result<()>;
     fn setup_vsyscall(&self) -> Result<()>;
     fn setup_mappings(&self, full: bool) -> Result<()>;
@@ -366,6 +367,7 @@ impl DuneSyscall for DuneDevice {
         map_stack()
     }
 
+    #[cfg(feature = "syscall")]
     fn setup_syscall(&self) -> Result<()> {
         setup_syscall(self.fd())
     }
