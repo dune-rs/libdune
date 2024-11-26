@@ -2,15 +2,13 @@
  * dune.S - assembly helper routines (e.g. system calls, interrupts, traps)
  */
 
-#define __ASSEMBLY__
+.equ USE_RDWRGSFS, 0
 
-#define USE_RDWRGSFS 0
-
-#define MSR_FS_BASE	0xc0000100
-#define GD_KT		0x10
-#define GD_KD		0x18
-#define GD_UD		0x28 | 0x03
-#define GD_UT		0x30 | 0x03
+.equ MSR_FS_BASE,	0xc0000100
+.equ GD_KT,		0x10
+.equ GD_KD,		0x18
+.equ GD_UD,		0x28 | 0x03
+.equ GD_UT,		0x30 | 0x03
 
 /*
  * Trap Frame Format
@@ -18,39 +16,40 @@
  */
 
 /* arguments */
-#define RDI	(0)
-#define RSI	(8)
-#define RDX	(16)
-#define RCX	(24)
-#define R8	(32)
-#define R9	(40)
+.equ RDI,	(0)
+.equ RSI,	(8)
+.equ RDX,	(16)
+.equ RCX,	(24)
+.equ R8,	(32)
+.equ R9,	(40)
 
 /* other registers */
-#define R10	(48)
-#define R11	(56)
-#define RBX	(64)
-#define RBP	(72)
-#define R12	(80)
-#define R13	(88)
-#define R14	(96)
-#define R15	(104)
+.equ R10,	(48)
+.equ R11,	(56)
+.equ RBX,	(64)
+.equ RBP,	(72)
+.equ R12,	(80)
+.equ R13,	(88)
+.equ R14,	(96)
+.equ R15,	(104)
 
-#define REG_END	(112)
+.equ REG_END,	(112)
 
 /* syscall num / return code */
-#define RAX	(112)
+.equ RAX, 112
+.equ RAX,	(112)
 
 /* exception frame */
-#define ERR	(120)
-#define RIP	(128)
-#define CS	(136)
-#define RFLAGS	(144)
-#define RSP	(152)
-#define SS	(160)
+.equ ERR,	(120)
+.equ RIP,	(128)
+.equ CS,	(136)
+.equ RFLAGS,	(144)
+.equ RSP,	(152)
+.equ SS,	(160)
 
-#define EF_START (128)
-#define TF_END	(168)
-#define TF_ALIGN (176)
+.equ EF_START, (128)
+.equ TF_END,	(168)
+.equ TF_ALIGN, (176)
 
 .text
 
@@ -176,7 +175,7 @@ __dune_enter:
 	subq	$REG_END, %rsp
 	SAVE_REGS 1, 0
 	SAVE_REST
-	movq	%rsp, DUNE_CFG_RSP(%rsi)
+	movq	%rsp, {DUNE_CFG_RSP}(%rsi)
 	movq	%rsi, %rdx
 	movq	${IOCTL_DUNE_ENTER}, %rsi
 	movq	$16, %rax /* __NR_ioctl */
@@ -193,7 +192,7 @@ __dune_retry:
 	movq	%r13, %rdi
 	/* Update RSP to point to the top of the stack as seen from inside Dune
 	 * mode. */
-	movq	DUNE_CFG_RSP(%rdi), %rsp
+	movq	{DUNE_CFG_RSP}(%rdi), %rsp
 	/* Go past the red zone mandated by the System V x86-64 ABI. */
 	subq	$128, %rsp
 	call	on_dune_exit
@@ -307,8 +306,7 @@ __dune_syscall:
 	/* then finally re-enable interrupts and jump to the handler */
 	sti
 	movq	%rsp, %rdi /* argument 0 */
-	lea	dune_syscall_handler, %rax
-	call	*%rax
+	call dune_syscall_handler
 
 	/* next restore the CPL3 FS base address */
 	SET_G3_FS_BASE
@@ -370,7 +368,7 @@ dune_ret_from_user:
 	movq	%rsi, RAX(%rdi)
 
 	/* fill in remaining exception frame data */
-	lea	dune_ret_from_user_finish, %rax
+	lea	dune_ret_from_user_finish(%rip), %rax
 	movq	%rax, RIP(%rdi)
 	movq	$GD_KT, CS(%rdi)
 	movq	$GD_KD, SS(%rdi)
