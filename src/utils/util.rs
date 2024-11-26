@@ -4,12 +4,90 @@ use std::{ptr, str};
 use libc::{sighandler_t, SIG_ERR};
 use libc::strlen;
 use libc::signal;
+use x86_64::VirtAddr;
 use std::arch::asm;
 use dune_sys::DuneTf;
 
-use crate::core::*;
+use crate::{core::*, Error};
+use crate::globals::{ARCH_GET_FS, ARCH_SET_FS};
+use crate::result::Result;
 
 type SigHandler = extern "C" fn(c_int);
+
+#[inline(always)]
+pub unsafe fn dune_get_ticks() -> u64 {
+    let a: u32;
+    let d: u32;
+    asm!(
+        "rdtsc",
+        out("eax") a,
+        out("edx") d,
+    );
+    (a as u64) | ((d as u64) << 32)
+}
+
+#[inline(always)]
+pub fn dune_flush_tlb_one(addr: u64) {
+    unsafe {
+        asm!(
+            "invlpg ({0})",
+            in(reg) addr,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+#[inline(always)]
+pub fn dune_flush_tlb() {
+    unsafe {
+        asm!(
+            "mov %cr3, %rax",
+            "mov %rax, %cr3",
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+pub fn load_cr3(cr3: u64) {
+    unsafe {
+        asm!("mov {0}, %cr3", in(reg) cr3, options(nostack, preserves_flags));
+    }
+}
+
+pub fn rd_rsp() -> u64 {
+    let esp: u64;
+    unsafe {
+        asm!("mov %rsp, {}", out(reg) esp);
+    }
+    esp
+}
+
+#[inline(always)]
+pub fn get_fs_base() -> Result<VirtAddr> {
+    let mut fs_base: u64 = 0;
+    unsafe {
+        let ret = arch_prctl(ARCH_GET_FS, &mut fs_base as *mut u64 as *mut c_void);
+        if ret == -1 {
+            eprintln!("dune: failed to get FS register");
+            return Err(Error::LibcError(libc::EIO));
+        }
+    }
+
+    Ok(VirtAddr::new(fs_base))
+}
+
+#[inline(always)]
+pub fn set_fs_base(fs_base: VirtAddr) -> Result<()> {
+    unsafe {
+        let ret = arch_prctl(ARCH_SET_FS, fs_base.as_u64() as *mut c_void);
+        if ret == -1 {
+            eprintln!("dune: failed to set FS register");
+            return Err(Error::Unknown);
+        }
+    }
+
+    Ok(())
+}
 
 #[inline(always)]
 unsafe fn dune_puts(buf: *const c_char) -> i64 {

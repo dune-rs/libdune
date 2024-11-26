@@ -6,7 +6,7 @@ use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
 use x86_64::{structures::paging::page_table::PageTableEntry, PhysAddr};
 use x86_64::structures::paging::page_table::PageTableFlags;
-use crate::{globals::*, DuneProcmapEntry, ProcMapType, DUNE_VM};
+use crate::{dune_flush_tlb, dune_flush_tlb_one, globals::*, DuneProcmapEntry, ProcMapType, DUNE_VM};
 use crate::mm::*;
 use crate::result::{Result, Error};
 

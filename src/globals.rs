@@ -440,34 +440,3 @@ pub fn rdmsrl(msr: u32) -> u64 {
     }
     ((high as u64) << 32) | (low as u64)
 }
-
-pub fn rd_rsp() -> u64 {
-    let esp: u64;
-    unsafe {
-        asm!("mov %rsp, {}", out(reg) esp);
-    }
-    esp
-}
-
-pub fn dune_flush_tlb_one(addr: u64) {
-    unsafe {
-        asm!("invlpg ({})", in(reg) addr, options(nostack, preserves_flags));
-    }
-}
-
-pub fn dune_flush_tlb() {
-    unsafe {
-        asm!(
-            "mov %cr3, %rax",
-            "mov %rax, %cr3",
-            out("rax") _,
-            options(nostack, preserves_flags)
-        );
-    }
-}
-
-pub fn load_cr3(cr3: u64) {
-    unsafe {
-        asm!("mov {0}, %cr3", in(reg) cr3, options(nostack, preserves_flags));
-    }
-}

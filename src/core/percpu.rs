@@ -7,9 +7,8 @@ use x86_64::registers::model_specific::{FsBase, GsBase};
 use dune_sys::dune::DuneConfig;
 use dune_sys::{funcs, funcs_vec, DuneDevice, IdtDescriptor};
 use x86_64::VirtAddr;
-use crate::{dune_die, globals::*, PGSIZE};
+use crate::{dune_die, get_fs_base, globals::*, PGSIZE};
 use crate::core::*;
-use super::arch_prctl;
 use crate::result::{Result, Error};
 
 #[repr(C, packed)]
@@ -75,31 +74,6 @@ pub const KFS_BASE: usize = offset_of!(DunePercpu, kfs_base);
 pub const UFS_BASE: usize = offset_of!(DunePercpu, ufs_base);
 pub const IN_USERMODE: usize = offset_of!(DunePercpu, in_usermode);
 pub const TRAP_STACK: usize = offset_of!(DunePercpu, tss.tss_rsp);
-
-fn get_fs_base() -> Result<VirtAddr> {
-    let mut fs_base: u64 = 0;
-    unsafe {
-        let ret = arch_prctl(ARCH_GET_FS, &mut fs_base as *mut u64 as *mut c_void);
-        if ret == -1 {
-            eprintln!("dune: failed to get FS register");
-            return Err(Error::LibcError(libc::EIO));
-        }
-    }
-
-    Ok(VirtAddr::new(fs_base))
-}
-
-fn set_fs_base(fs_base: VirtAddr) -> Result<()> {
-    unsafe {
-        let ret = arch_prctl(ARCH_SET_FS, fs_base.as_u64() as *mut c_void);
-        if ret == -1 {
-            eprintln!("dune: failed to set FS register");
-            return Err(Error::Unknown);
-        }
-    }
-
-    Ok(())
-}
 
 impl DunePercpu {
     funcs!(percpu_ptr, u64);

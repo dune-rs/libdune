@@ -20,6 +20,10 @@ extern "C" {
     pub fn __dune_go_dune(dune_fd: c_int, conf: *mut DuneConfig) -> !;
     pub fn __dune_go_linux(conf: *mut DuneConfig);
 
+    pub fn dune_pop_trap_frame(tf: *mut dune_sys::DuneTf);
+    pub fn dune_jump_to_user(tf: *mut dune_sys::DuneTf) -> c_int;
+    pub fn dune_ret_from_user(ret: c_int) -> !;
+
     // assembly routine for handling vsyscalls
     pub static __dune_vsyscall_page: u64;
 }

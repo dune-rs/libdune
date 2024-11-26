@@ -1,10 +1,11 @@
 use dune_sys::*;
 
 use x86_64::VirtAddr;
-use crate::globals::{rd_rsp, PERM_BIG, PERM_R, PERM_U, PERM_W, PERM_X};
+use crate::globals::{PERM_BIG, PERM_R, PERM_U, PERM_W, PERM_X};
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
 use crate::core::{*};
 use crate::mm::MmapArgs;
+use crate::utils::rd_rsp;
 use crate::result::Result;
 
 const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
