@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, *};
 use crate::{core::*, dune_page_init};
+use crate::syscall::DuneSyscall;
 use crate::result::{Result, Error};
 
 extern "C" {
@@ -90,10 +91,8 @@ impl DuneRoutine for DuneDevice {
 
         dune_page_init()?;
         self.setup_mappings(map_full)?;
-        #[cfg(feature = "syscall")]
         self.setup_syscall()?;
 
-        #[cfg(feature = "signal")]
         self.setup_signals()?;
 
         self.setup_idt();

@@ -6,7 +6,7 @@ use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
 use x86_64::{structures::paging::page_table::PageTableEntry, PhysAddr};
 use x86_64::structures::paging::page_table::PageTableFlags;
-use crate::globals::*;
+use crate::{globals::*, DuneProcmapEntry, ProcMapType, DUNE_VM};
 use crate::mm::*;
 use crate::result::{Result, Error};
 
@@ -133,13 +133,13 @@ pub fn get_pte_flags(perms: i32) -> PageTableFlags {
     flags
 }
 
-pub trait DuneLayoutI {
+pub trait AddressMapping {
     fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
     fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
     fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
 }
 
-impl DuneLayoutI for DuneLayout {
+impl AddressMapping for DuneLayout {
     fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
         let base_map = self.base_map();
         let phys_limit = self.phys_limit();
@@ -165,6 +165,63 @@ impl DuneLayoutI for DuneLayout {
         } else {
             PhysAddr::new(ptr.as_u64())
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MmapArgs {
+    va: VirtAddr,
+    len: u64,
+    perm: i32,
+}
+
+impl MmapArgs {
+    funcs!(va, VirtAddr);
+    funcs!(len, u64);
+    funcs!(perm, i32);
+
+    fn new(va: VirtAddr, len: u64, perm: i32) -> Self {
+        Self { va, len, perm }
+    }
+
+    pub fn map (&self) -> Result<()> {
+        let mut dune_vm = DUNE_VM.lock().unwrap();
+        let pa = dune_vm.layout().va_to_pa(self.va);
+        dune_vm.map_phys(self.va, self.len, pa, self.perm)
+    }
+}
+
+impl Default for MmapArgs {
+    fn default() -> Self {
+        Self {
+            va: VirtAddr::new(0),
+            len: 0,
+            perm: 0,
+        }
+    }
+}
+
+impl From<&DuneProcmapEntry> for MmapArgs {
+    fn from(ent: &DuneProcmapEntry) -> Self {
+        let mut perm = PERM_NONE;
+        perm = match ent.type_() {
+            ProcMapType::Vdso => PERM_U | PERM_R | PERM_X,
+            ProcMapType::Vvar => PERM_U | PERM_R,
+            _ => {
+                if ent.r() {
+                    perm |= PERM_R;
+                }
+                if ent.w() {
+                    perm |= PERM_W;
+                }
+                if ent.x() {
+                    perm |= PERM_X;
+                }
+                perm
+            },
+        };
+
+        Self::new(ent.begin(), ent.len(), perm)
     }
 }
 
