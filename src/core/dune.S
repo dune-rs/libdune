@@ -52,16 +52,6 @@
 #define TF_END	(168)
 #define TF_ALIGN (176)
 
-/*
- * Supervisor Private Area Format
- */
-
-#define TMP		(8)
-#define KFS_BASE	(16)
-#define UFS_BASE	(24)
-#define IN_USERMODE	(32)
-#define TRAP_STACK	(44)
-
 .text
 
 /*

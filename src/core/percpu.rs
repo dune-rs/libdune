@@ -1,12 +1,14 @@
 use std::ffi::c_void;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::{mem, ptr};
 use std::{arch::asm, mem::offset_of};
 use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, munmap, MAP_FAILED};
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use dune_sys::dune::DuneConfig;
-use dune_sys::{funcs, funcs_vec};
+use dune_sys::{funcs, funcs_vec, DuneDevice, IdtDescriptor};
 use x86_64::VirtAddr;
-use crate::{globals::*, PGSIZE};
+use crate::{dune_die, globals::*, PGSIZE};
 use crate::core::*;
 use super::arch_prctl;
 use crate::result::{Result, Error};
@@ -55,17 +57,25 @@ static GDT_TEMPLATE: [u64; NR_GDT_ENTRIES] = [
     0,
 ];
 
-#[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
 pub struct DunePercpu {
     percpu_ptr: u64,
     tmp: u64,
     kfs_base: VirtAddr,
     ufs_base: VirtAddr,
     in_usermode: u64,
+    device: Arc<DuneDevice>,
     pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
 }
+
+/*
+ * Supervisor Private Area Format
+ */
+pub const TMP : usize = offset_of!(DunePercpu, tmp);
+pub const KFS_BASE: usize = offset_of!(DunePercpu, kfs_base);
+pub const UFS_BASE: usize = offset_of!(DunePercpu, ufs_base);
+pub const IN_USERMODE: usize = offset_of!(DunePercpu, in_usermode);
+pub const TRAP_STACK: usize = offset_of!(DunePercpu, tss.tss_rsp);
 
 fn get_fs_base() -> Result<VirtAddr> {
     let mut fs_base: u64 = 0;
@@ -73,7 +83,7 @@ fn get_fs_base() -> Result<VirtAddr> {
         let ret = arch_prctl(ARCH_GET_FS, &mut fs_base as *mut u64 as *mut c_void);
         if ret == -1 {
             eprintln!("dune: failed to get FS register");
-            return Err(Error::Unknown);
+            return Err(Error::LibcError(libc::EIO));
         }
     }
 
@@ -100,7 +110,7 @@ impl DunePercpu {
     funcs!(in_usermode, u64);
     funcs_vec!(gdt, u64);
 
-    pub fn create() -> Result<DunePercpu> {
+    pub fn create(device: &Arc<DuneDevice>) -> Result<&mut DunePercpu> {
         let fs_base = get_fs_base()?;
         let percpu = unsafe {
             let ret = mmap(
@@ -116,21 +126,34 @@ impl DunePercpu {
             }
             Ok(ret)
         };
+
         percpu.and_then(|ret| {
             let percpu_ptr = ret as *mut DunePercpu;
+
+            // map_ptr
+            device.map_ptr(VirtAddr::from_ptr(percpu_ptr), size_of::<DunePercpu>());
+
             let percpu = unsafe { &mut *percpu_ptr };
             percpu.set_kfs_base(fs_base)
                 .set_ufs_base(fs_base)
-                .set_in_usermode(0)
-                .setup_safe_stack()?;
+                .set_in_usermode(0);
 
-            Ok(unsafe { ptr::read(percpu) })
+            match percpu.setup_safe_stack() {
+                Ok(()) => {
+                    percpu.device = Arc::clone(device);
+                    Ok(percpu)
+                },
+                Err(e) => {
+                    unsafe { munmap(percpu_ptr as *mut c_void, PGSIZE as usize) };
+                    return Err(e);
+                },
+            }
         })
     }
 
-    pub fn free(&self) {
+    pub fn free(ptr: *mut DunePercpu) {
         // XXX free stack
-        unsafe { munmap(self as *const _ as *mut c_void, PGSIZE as usize) };
+        unsafe { munmap(ptr as *const _ as *mut c_void, PGSIZE as usize) };
     }
 
     fn setup_gdt(&mut self) {
@@ -162,7 +185,9 @@ impl DunePercpu {
      * dune_boot - Brings the user-level OS online
      * @percpu: the thread-local data
      */
-    fn dune_boot(&self) {
+    fn dune_boot(&mut self) -> Result<()> {
+        self.setup_gdt();
+
         let mut gdtr = Tptr::default();
         let gdt_ptr = std::ptr::addr_of!(self.gdt);
         unsafe {
@@ -209,6 +234,49 @@ impl DunePercpu {
         // STEP 6: FS and GS require special initialization on 64-bit
         FsBase::write(self.kfs_base);
         GsBase::write(VirtAddr::new(self as *const _ as u64));
+
+        Ok(())
+    }
+
+    pub fn do_dune_enter(&mut self) -> Result<()> {
+        let root = &mut *PGROOT.lock().unwrap();
+
+        // map the stack into the Dune address space
+        self.device.map_stack();
+
+        let mut conf = DuneConfig::default();
+        conf.set_vcpu(0)
+            .set_rip(&__dune_ret as *const _ as u64)
+            .set_rsp(0)
+            .set_cr3(root as *const _ as u64)
+            .set_rflags(0x2);
+
+        // NOTE: We don't setup the general purpose registers because __dune_ret
+        // will restore them as they were before the __dune_enter call
+
+        let dune_fd = self.device.fd();
+        let ret = unsafe { __dune_enter(dune_fd, &conf) };
+        if ret != 0 {
+            println!("dune: entry to Dune mode failed, ret is {}", ret);
+            return Err(Error::Unknown);
+        }
+
+        self.dune_boot().map_err(|e|{
+            println!("dune: failed to boot Dune mode: {:?}", e);
+            unsafe { dune_die() };
+            e
+        })
+    }
+
+    pub fn dune_enter_ex(&mut self) -> Result<()> {
+        let fs_base = get_fs_base()?;
+        // let percpu = unsafe { &mut *percpu_ptr };
+        self.set_kfs_base(fs_base)
+            .set_ufs_base(fs_base)
+            .set_in_usermode(0)
+            .setup_safe_stack()?;
+
+        self.do_dune_enter()
     }
 }
 
@@ -234,41 +302,4 @@ pub fn dune_set_user_fs(fs_base: u64) {
             options(nostack, preserves_flags)
         );
     }
-}
-
-pub fn do_dune_enter(percpu: &mut DunePercpu) -> Result<()> {
-    let root = &mut *PGROOT.lock().unwrap();
-    let mut conf = DuneConfig::default();
-    conf.set_vcpu(0)
-        .set_rip(&__dune_ret as *const _ as u64)
-        .set_rsp(0)
-        .set_cr3(root as *const _ as u64)
-        .set_rflags(0x2);
-
-    percpu.setup_gdt();
-    // percpu.pre_enter(percpu)?;
-    // NOTE: We don't setup the general purpose registers because __dune_ret
-    // will restore them as they were before the __dune_enter call
-
-    let dune_fd = *DUNE_FD.lock().unwrap();
-    let ret = unsafe { __dune_enter(dune_fd, &conf) };
-    if ret != 0 {
-        println!("dune: entry to Dune mode failed, ret is {}", ret);
-        return Err(Error::Unknown);
-    }
-
-    // percpu.post_exit(percpu)?;
-
-    Ok(())
-}
-
-pub fn dune_enter_ex(percpu_ptr: *mut DunePercpu) -> Result<()> {
-    let fs_base = get_fs_base()?;
-    let percpu = unsafe { &mut *percpu_ptr };
-    percpu.set_kfs_base(fs_base)
-        .set_ufs_base(fs_base)
-        .set_in_usermode(0)
-        .setup_safe_stack()?;
-
-    do_dune_enter(percpu)
 }

@@ -2,6 +2,7 @@ use std::mem;
 use std::io;
 use std::ops::BitAnd;
 use std::ptr;
+use libc::c_int;
 use libc::ioctl;
 use dune_sys::*;
 use libc::mmap;
@@ -22,10 +23,42 @@ use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGE
 use crate::{core::{PGROOT, *}, dune_vm_map_phys};
 use crate::result::{Result, Error};
 
-// pub static mut PGROOT: *mut PageTable = ptr::null_mut();
-static mut PHYS_LIMIT: PhysAddr = PhysAddr::new(0);
-static mut MMAP_BASE: VirtAddr = VirtAddr::new(0);
-static mut STACK_BASE: VirtAddr = VirtAddr::new(0);
+trait DuneLayoutI {
+    fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
+    fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
+    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
+}
+
+impl DuneLayoutI for DuneLayout {
+    fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
+        let base_map = self.base_map();
+        let phys_limit = self.phys_limit();
+        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
+        PhysAddr::new(addr)
+    }
+
+    fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
+        let base_stack = self.base_stack();
+        let phys_limit = self.phys_limit();
+        let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
+        PhysAddr::new(addr)
+    }
+
+    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
+        let base_map = self.base_map();
+        let base_stack = self.base_stack();
+        let phys_limit = self.phys_limit();
+        if ptr >= base_stack {
+            let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
+            PhysAddr::new(addr)
+        } else if ptr >= base_map {
+            let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
+            PhysAddr::new(addr)
+        } else {
+            PhysAddr::new(ptr.as_u64())
+        }
+    }
+}
 
 /// The physical address limit of the address space
 ///  ptr - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
@@ -33,11 +66,7 @@ static mut STACK_BASE: VirtAddr = VirtAddr::new(0);
 fn dune_mmap_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
     match LAYOUT.lock().and_then(|a|{
         let layout = &*a;
-        let base_map = layout.base_map();
-        let base_stack = layout.base_stack();
-        let phys_limit = layout.phys_limit();
-        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
-        Ok(PhysAddr::new(addr))
+        Ok(layout.mmap_addr_to_pa(ptr))
     }) {
         Ok(pa) => pa,
         Err(_) => PhysAddr::new(0),
@@ -49,10 +78,7 @@ fn dune_mmap_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
 fn dune_stack_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
     match LAYOUT.lock().and_then(|a|{
         let layout = &*a;
-        let base_stack = layout.base_stack();
-        let phys_limit = layout.phys_limit();
-        let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
-        Ok(PhysAddr::new(addr))
+        Ok(layout.stack_addr_to_pa(ptr))
     }) {
         Ok(pa) => pa,
         Err(_) => PhysAddr::new(0),
@@ -62,18 +88,7 @@ fn dune_stack_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
 fn dune_va_to_pa(ptr: VirtAddr) -> PhysAddr {
     match LAYOUT.lock().and_then(|a|{
         let layout = &*a;
-        let base_map = layout.base_map();
-        let base_stack = layout.base_stack();
-        let phys_limit = layout.phys_limit();
-        if ptr >= base_stack {
-            let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
-            Ok(PhysAddr::new(addr))
-        } else if ptr >= base_map {
-            let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
-            Ok(PhysAddr::new(addr))
-        } else {
-            Ok(PhysAddr::new(ptr.as_u64()))
-        }
+        Ok(layout.va_to_pa(ptr))
     }) {
         Ok(pa) => pa,
         Err(_) => PhysAddr::new(0),
@@ -169,9 +184,8 @@ unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
 }
 
 #[cfg(feature = "dune")]
-pub fn setup_syscall() -> Result<()> {
-    let dune_fd = *DUNE_FD.lock().unwrap();
-    let lstar = unsafe { ioctl(dune_fd, DUNE_GET_SYSCALL) };
+pub fn setup_syscall(fd: c_int) -> Result<()> {
+    let lstar = unsafe { ioctl(fd, DUNE_GET_SYSCALL) };
     if lstar == -1 {
         return Err(Error::Unknown);
     }
@@ -212,7 +226,7 @@ pub fn setup_syscall() -> Result<()> {
 }
 
 #[cfg(not(feature = "dune"))]
-pub fn setup_syscall() -> Result<()> {
+pub fn setup_syscall(fd: c_int) -> Result<()> {
     log::warn!("No syscall support");
     Ok(())
 }
@@ -300,10 +314,10 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
     Ok(())
 }
 
-pub fn setup_mappings(full: bool) -> Result<()> {
+#[cfg(feature = "dune")]
+pub fn setup_mappings(fd: c_int, full: bool) -> Result<()> {
     let layout = &mut DuneLayout::default() as *mut DuneLayout;
-    let dune_fd = *DUNE_FD.lock().unwrap();
-    let ret = unsafe { ioctl(dune_fd, DUNE_GET_LAYOUT, layout) };
+    let ret = unsafe { ioctl(fd, DUNE_GET_LAYOUT, layout) };
     if ret != 0 {
         return Err(Error::Unknown);
     }
@@ -316,6 +330,12 @@ pub fn setup_mappings(full: bool) -> Result<()> {
     } else {
         __setup_mappings_precise()
     }
+}
+
+#[cfg(not(feature = "dune"))]
+pub fn setup_mappings(fd: c_int, full: bool) -> Result<()> {
+    log::warn!("No dune support");
+    Ok(())
 }
 
 fn map_stack_cb(e: &DuneProcmapEntry) -> Result<()> {
@@ -331,24 +351,33 @@ fn map_stack() -> Result<()> {
     dune_procmap_iterate(map_stack_cb)
 }
 
-pub trait DuneHook {
-    fn pre_enter(&self, percpu: &mut DunePercpu) -> Result<()>;
-    fn post_exit(&self, percpu: &mut DunePercpu) -> Result<()>;
+pub trait DuneSyscall {
+    fn map_ptr(&self, p: VirtAddr, len: usize) -> Result<()>;
+    fn map_stack(&self) -> Result<()>;
+    fn setup_syscall(&self) -> Result<()>;
+    fn setup_vsyscall(&self) -> Result<()>;
+    fn setup_mappings(&self, full: bool) -> Result<()>;
 }
 
-// dune-spesicifc routines
-impl DuneHook for DunePercpu {
-    fn pre_enter(&self, percpu: &mut DunePercpu) -> Result<()> {
-        let safe_stack= VirtAddr::new(percpu.tss.tss_rsp[0]);
-        unsafe { map_ptr(safe_stack, PGSIZE) };
+impl DuneSyscall for DuneDevice {
 
-        setup_syscall()?;
-        map_stack()?;
-
-        Ok(())
+    fn map_ptr(&self, p: VirtAddr, len: usize) -> Result<()> {
+        unsafe { map_ptr(p, len) }
     }
 
-    fn post_exit(&self, percpu: &mut DunePercpu) -> Result<()> {
-        Ok(())
+    fn map_stack(&self) -> Result<()> {
+        map_stack()
+    }
+
+    fn setup_syscall(&self) -> Result<()> {
+        setup_syscall(self.fd())
+    }
+
+    fn setup_vsyscall(&self) -> Result<()> {
+        setup_vsyscall()
+    }
+
+    fn setup_mappings(&self, full: bool) -> Result<()> {
+        setup_mappings(self.fd(), full)
     }
 }

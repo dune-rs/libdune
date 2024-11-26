@@ -1,6 +1,6 @@
 use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use libc::{open, O_RDWR};
 use x86_64::structures::paging::PageTable;
@@ -27,6 +27,11 @@ extern "C" {
 
 global_asm!(
     include_str!("dune.S"),
+    TMP = const TMP,
+    KFS_BASE = const KFS_BASE,
+    UFS_BASE = const UFS_BASE,
+    IN_USERMODE = const IN_USERMODE,
+    TRAP_STACK = const TRAP_STACK,
     IOCTL_DUNE_ENTER = const IOCTL_DUNE_ENTER,
     DUNE_CFG_RET = const DUNE_CFG_RET,
     DUNE_CFG_RAX = const DUNE_CFG_RAX,
@@ -68,42 +73,101 @@ lazy_static! {
     pub static ref PGROOT: Mutex<PageTable> = Mutex::new(PageTable::new());
     pub static ref DUNE_FD: Mutex<i32> = Mutex::new(0);
     pub static ref LAYOUT: Mutex<DuneLayout> = Mutex::new(DuneLayout::default());
+    pub static ref DUNE_DEVICE: Mutex<DuneDevice> = Mutex::new(DuneDevice::new().unwrap());
 }
 
-pub static mut DUNE_DEVICE: Option<DuneDevice> = None;
+pub trait DuneRoutine {
+    fn dune_init(&mut self, map_full: bool) -> Result<()>;
+    fn dune_enter(&mut self) -> Result<()>;
+    fn on_dune_exit(&mut self, conf: *mut DuneConfig) -> !;
+}
 
-/**
- * dune_enter - transitions a process to "Dune mode"
- *
- * Can only be called after dune_init().
- *
- * Use this function in each forked child and/or each new thread
- * if you want to re-enter "Dune mode".
- *
- * Returns 0 on success, otherwise failure.
- */
-#[no_mangle]
-pub unsafe extern "C" fn dune_enter() -> Result<()> {
-    // Check if this process already entered Dune before a fork...
-    LPERCPU.with(|percpu| {
-        let mut percpu = percpu.borrow_mut();
-        // if not none then enter
-        if percpu.is_none() {
-            *percpu = DunePercpu::create().ok();
-            // if still none, return error
-            if let None = *percpu {
-                return Err(Error::Unknown);
+impl DuneRoutine for DuneDevice {
+    fn dune_init(&mut self, map_full: bool) -> Result<()> {
+        // Initialize the root page table
+        lazy_static::initialize(&PGROOT);
+
+        // Zero out the root page table
+        PGROOT.lock().as_deref_mut().and_then(|pgroot|{
+            pgroot.zero();
+            Ok(())
+        });
+
+        dune_page_init()?;
+        self.setup_mappings(map_full)?;
+        self.setup_syscall()?;
+
+        self.setup_signals()?;
+
+        self.setup_idt();
+
+        Ok(())
+    }
+
+    fn dune_enter(&mut self) -> Result<()> {
+        let mut device = Arc::new(*self);
+        // Check if this process already entered Dune before a fork...
+        LPERCPU.with(|lpercpu| {
+            let mut lpercpu = lpercpu.borrow_mut();
+            // if not none, enter Dune mode
+            match lpercpu.as_mut() {
+                Some(percpu) => {
+                    percpu.do_dune_enter()
+                },
+                None => {
+                    match DunePercpu::create(&mut device) {
+                        Ok(percpu) => {
+                            percpu.do_dune_enter().map_err(|e|{
+                                DunePercpu::free(percpu);
+                                e
+                            })?;
+                            // if successful, set lpercpu to Some(percpu)
+                            // let a = *lpercpu;
+                            // a.replace(percpu);
+                            Ok(())
+                        },
+                        Err(e) => {
+                            // if still none, return error
+                            Err(e)
+                        }
+                    }
+                },
             }
+        });
+
+        Ok(())
+    }
+
+    fn on_dune_exit(&mut self, conf_: *mut DuneConfig) -> ! {
+        let conf = unsafe { &*conf_ };
+        let ret: DuneRetCode = conf.ret().into();
+        match ret {
+            DuneRetCode::Exit => {
+                unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
+            },
+            DuneRetCode::EptViolation => {
+                println!("dune: exit due to EPT violation");
+            },
+            DuneRetCode::Interrupt => {
+                self.handle_int(conf_);
+                println!("dune: exit due to interrupt {}", conf.status());
+            },
+            DuneRetCode::Signal => {
+                unsafe { __dune_go_dune(self.fd(), conf_) };
+            },
+            DuneRetCode::UnhandledVmexit => {
+                println!("dune: exit due to unhandled VM exit");
+            },
+            DuneRetCode::NoEnter => {
+                println!("dune: re-entry to Dune mode failed, status is {}", conf.status());
+            },
+            _ => {
+                println!("dune: unknown exit from Dune, ret={}, status={}", conf.ret(), conf.status());
+            },
         }
 
-        let percpu = percpu.as_mut().unwrap();
-        do_dune_enter(percpu).map_err(|e|{
-            percpu.free();
-            e
-        })
-    });
-
-    Ok(())
+        unsafe { libc::exit(libc::EXIT_FAILURE) };
+    }
 }
 
  /**
@@ -123,37 +187,30 @@ pub unsafe extern "C" fn dune_enter() -> Result<()> {
   */
 #[no_mangle]
 pub extern "C" fn dune_init(map_full: bool) -> Result<()> {
-    let dune_fd = &mut *DUNE_FD.lock().unwrap();
-    *dune_fd = unsafe { open("/dev/dune\0".as_ptr() as *const i8, O_RDWR) };
-    if *dune_fd <= 0 {
-        return Err(Error::Unknown);
-    }
+    lazy_static::initialize(&DUNE_DEVICE);
+    let mut dune_device = DUNE_DEVICE.lock().unwrap();
+    dune_device.dune_init(map_full).map_err(|e|{
+        let r = Error::Io(io::Error::new(ErrorKind::Other, format!("dune_init() {}", e)));
+        log::error!("{:?}", r);
+        dune_device.close();
+        r
+    })
+}
 
-    // Initialize the root page table
-    lazy_static::initialize(&PGROOT);
-
-    // Zero out the root page table
-    PGROOT.lock().as_deref_mut().and_then(|pgroot|{
-        pgroot.zero();
-        Ok(())
-    });
-
-    if dune_page_init().is_err() {
-        return Err(Error::Unknown);
-    }
-    
-    if setup_mappings(map_full).is_err() {
-        return Err(Error::Unknown);
-    }
-
-    if setup_syscall().is_err() {
-        return Err(Error::Unknown);
-    }
-
-    setup_signals()?;
-
-    setup_idt();
-
+/**
+ * dune_enter - transitions a process to "Dune mode"
+ *
+ * Can only be called after dune_init().
+ *
+ * Use this function in each forked child and/or each new thread
+ * if you want to re-enter "Dune mode".
+ *
+ * Returns 0 on success, otherwise failure.
+ */
+#[no_mangle]
+pub unsafe extern "C" fn dune_enter() -> Result<()> {
+    let mut dune_device = DUNE_DEVICE.lock().unwrap();
+    dune_device.dune_enter()?;
     Ok(())
 }
 
@@ -168,11 +225,10 @@ pub extern "C" fn dune_init(map_full: bool) -> Result<()> {
  */
 #[no_mangle]
 pub unsafe extern "C" fn dune_init_and_enter() -> Result<()> {
-    if dune_init(true).is_err() {
-        return Err(Error::Unknown);
-    }
-
-    dune_enter()
+    let mut dune_device = DUNE_DEVICE.lock().unwrap();
+    dune_device.dune_init(true)?;
+    dune_device.dune_enter()?;
+    Ok(())
 }
 
 /**
@@ -182,35 +238,7 @@ pub unsafe extern "C" fn dune_init_and_enter() -> Result<()> {
  * __dune_go_linux().
  */
 #[no_mangle]
-pub unsafe extern "C" fn on_dune_exit(conf_: *mut DuneConfig) -> ! {
-    let conf = unsafe { &*conf_ };
-    let ret: DuneRetCode = conf.ret().into();
-    match ret {
-        DuneRetCode::Exit => {
-            unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
-        },
-        DuneRetCode::EptViolation => {
-            println!("dune: exit due to EPT violation");
-        },
-        DuneRetCode::Interrupt => {
-            #[cfg(feature = "debug")]
-            dune_debug_handle_int(conf_);
-            println!("dune: exit due to interrupt {}", conf.status());
-        },
-        DuneRetCode::Signal => {
-            let dune_fd = *DUNE_FD.lock().unwrap();
-            __dune_go_dune(dune_fd, conf_);
-        },
-        DuneRetCode::UnhandledVmexit => {
-            println!("dune: exit due to unhandled VM exit");
-        },
-        DuneRetCode::NoEnter => {
-            println!("dune: re-entry to Dune mode failed, status is {}", conf.status());
-        },
-        _ => {
-            println!("dune: unknown exit from Dune, ret={}, status={}", conf.ret(), conf.status());
-        },
-    }
-
-    std::process::exit(libc::EXIT_FAILURE);
+pub unsafe extern "C" fn on_dune_exit(conf: *mut DuneConfig) -> ! {
+    let mut dune_device = DUNE_DEVICE.lock().unwrap();
+    dune_device.on_dune_exit(conf);
 }
