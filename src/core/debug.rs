@@ -14,7 +14,7 @@ extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) 
         let dune_conf = &mut *(priv_data as *mut DuneConfig);
 
         // We don't need the preemption trap anymore.
-        let device = &mut *DUNE_DEVICE.lock().unwrap();
+        let device = DUNE_DEVICE.lock().unwrap();
         dune_trap_disable(device.fd());
 
         // Copy the TF bit from Linux mode to Dune mode. This way, the program
@@ -38,7 +38,6 @@ pub trait DuneDebug {
 impl DuneDebug for DuneDevice {
 
     fn trap_enable(&mut self, trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void) {
-        // let device = &mut *DUNE_DEVICE.lock().unwrap();
         let trap_regs = self.get_trap_regs_mut();
         let mut trap_conf = DuneTrapConfig::default();
         trap_conf.set_trigger_rip(trigger_rip)

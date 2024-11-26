@@ -4,7 +4,7 @@ use std::{mem, ptr};
 use std::{arch::asm, mem::offset_of};
 use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, munmap, MAP_FAILED};
 use x86_64::registers::model_specific::{FsBase, GsBase};
-use dune_sys::dune::{self, DuneConfig};
+use dune_sys::dune::DuneConfig;
 use dune_sys::{funcs, funcs_vec, DuneDevice, IdtDescriptor};
 use x86_64::VirtAddr;
 use crate::{dune_die, globals::*, PGSIZE};

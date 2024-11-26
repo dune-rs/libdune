@@ -17,78 +17,7 @@ use crate::CreateType;
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
 use crate::core::{*};
 use crate::result::{Result, Error};
-
-trait DuneLayoutI {
-    fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
-    fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
-    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
-}
-
-impl DuneLayoutI for DuneLayout {
-    fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
-        let base_map = self.base_map();
-        let phys_limit = self.phys_limit();
-        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
-        PhysAddr::new(addr)
-    }
-
-    fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
-        let base_stack = self.base_stack();
-        let phys_limit = self.phys_limit();
-        let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
-        PhysAddr::new(addr)
-    }
-
-    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
-        let base_map = self.base_map();
-        let base_stack = self.base_stack();
-        let phys_limit = self.phys_limit();
-        if ptr >= base_stack {
-            let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE;
-            PhysAddr::new(addr)
-        } else if ptr >= base_map {
-            let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE - GPA_MAP_SIZE;
-            PhysAddr::new(addr)
-        } else {
-            PhysAddr::new(ptr.as_u64())
-        }
-    }
-}
-
-/// The physical address limit of the address space
-///  ptr - MMAP_BASE + PHYS_LIMIT - GPA_STACK_SIZE - GPA_MAP_SIZE
-///
-fn dune_mmap_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
-    match LAYOUT.lock().and_then(|a|{
-        let layout = &*a;
-        Ok(layout.mmap_addr_to_pa(ptr))
-    }) {
-        Ok(pa) => pa,
-        Err(_) => PhysAddr::new(0),
-    }
-}
-
-/// The physical address limit of the address space
-/// ptr - STACK_BASE + PHYS_LIMIT - GPA_STACK_SIZE
-fn dune_stack_addr_to_pa(ptr: VirtAddr) -> PhysAddr {
-    match LAYOUT.lock().and_then(|a|{
-        let layout = &*a;
-        Ok(layout.stack_addr_to_pa(ptr))
-    }) {
-        Ok(pa) => pa,
-        Err(_) => PhysAddr::new(0),
-    }
-}
-
-fn dune_va_to_pa(ptr: VirtAddr) -> PhysAddr {
-    match LAYOUT.lock().and_then(|a|{
-        let layout = &*a;
-        Ok(layout.va_to_pa(ptr))
-    }) {
-        Ok(pa) => pa,
-        Err(_) => PhysAddr::new(0),
-    }
-}
+use crate::mm::DuneLayoutI;
 
 #[derive(Debug, Clone, Copy)]
 struct MmapArgs {
@@ -128,7 +57,8 @@ impl Default for MmapArgs {
 impl From<&DuneProcmapEntry> for MmapArgs {
     fn from(ent: &DuneProcmapEntry) -> Self {
         let mut perm = PERM_NONE;
-        let pa = dune_va_to_pa(ent.begin());
+        let dune_vm = DUNE_VM.lock().unwrap();
+        let pa = dune_vm.layout().va_to_pa(ent.begin());
 
         perm = match ent.type_() {
             ProcMapType::Vdso => PERM_U | PERM_R | PERM_X,
@@ -156,10 +86,11 @@ unsafe fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
     let page = p.align_down(PGSIZE as u64);
     let page_end = (p + len as u64).align_down(PGSIZE as u64);
     let len = page_end - page + PGSIZE as u64;
+    let dune_vm = DUNE_VM.lock().unwrap();
     MmapArgs::default()
             .set_va(page)
             .set_len(len)
-            .set_pa(dune_va_to_pa(page))
+            .set_pa(dune_vm.layout().va_to_pa(page))
             .set_perm(PERM_R | PERM_W)
             .map()
 }
@@ -199,7 +130,7 @@ pub fn setup_syscall(fd: c_int) -> Result<()> {
     let mut dune_vm = DUNE_VM.lock().unwrap();
     for i in (0..=PGSIZE).step_by(PGSIZE) {
         let start = lstara + i as u64;
-        let pa = dune_mmap_addr_to_pa(page + i as u64);
+        let pa = dune_vm.layout().mmap_addr_to_pa(page + i as u64);
         dune_vm.map_page(start, pa, PageTableFlags::PRESENT, CreateType::Normal)?;
     }
 
@@ -216,8 +147,8 @@ const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
 
 #[cfg(all(feature = "dune", feature = "syscall"))]
 fn setup_vsyscall() -> Result<()> {
-    let addr = dune_va_to_pa(VSYSCALL_ADDR);
     let mut dune_vm = DUNE_VM.lock().unwrap();
+    let addr = dune_vm.layout().va_to_pa(VSYSCALL_ADDR);
     dune_vm.map_page(VSYSCALL_ADDR, addr,
             PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE,
             CreateType::Normal)?;
@@ -275,19 +206,19 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
     MmapArgs::default()
             .set_va(layout.base_map())
             .set_len(GPA_MAP_SIZE)
-            .set_pa(dune_mmap_addr_to_pa(layout.base_map()))
+            .set_pa(layout.mmap_addr_to_pa(layout.base_map()))
             .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
             .map()?;
     MmapArgs::default()
             .set_va(layout.base_stack())
             .set_len(GPA_STACK_SIZE)
-            .set_pa(dune_stack_addr_to_pa(layout.base_stack()))
+            .set_pa(layout.stack_addr_to_pa(layout.base_stack()))
             .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
             .map();
     MmapArgs::default()
             .set_va(VirtAddr::new(PAGEBASE.as_u64()))
             .set_len((MAX_PAGES * PGSIZE) as u64)
-            .set_pa(dune_va_to_pa(VirtAddr::new(PAGEBASE.as_u64())))
+            .set_pa(layout.va_to_pa(VirtAddr::new(PAGEBASE.as_u64())))
             .set_perm(PERM_R | PERM_W | PERM_BIG)
             .map();
 
@@ -305,11 +236,11 @@ pub fn setup_mappings(fd: c_int, full: bool) -> Result<()> {
         return Err(Error::Unknown);
     }
 
-    let _layout = &mut *LAYOUT.lock().unwrap();
-    *_layout = unsafe { *layout };
+    let mut dune_vm = DUNE_VM.lock().unwrap();
+    dune_vm.set_layout(unsafe { *layout });
 
     if full {
-        __setup_mappings_full(_layout)
+        __setup_mappings_full(unsafe { &*layout })
     } else {
         __setup_mappings_precise()
     }

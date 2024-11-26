@@ -1,5 +1,5 @@
 use std::{default, ptr};
-use dune_sys::funcs;
+use dune_sys::{funcs, DuneLayout};
 use libc::c_void;
 use x86_64::structures::paging::page_table::PageTableLevel;
 use x86_64::structures::paging::PageTable;
@@ -133,15 +133,54 @@ pub fn get_pte_flags(perms: i32) -> PageTableFlags {
     flags
 }
 
+pub trait DuneLayoutI {
+    fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
+    fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
+    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
+}
+
+impl DuneLayoutI for DuneLayout {
+    fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
+        let base_map = self.base_map();
+        let phys_limit = self.phys_limit();
+        let addr = ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - (GPA_STACK_SIZE - GPA_MAP_SIZE) as u64;
+        PhysAddr::new(addr)
+    }
+
+    fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
+        let base_stack = self.base_stack();
+        let phys_limit = self.phys_limit();
+        let addr = ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE as u64;
+        PhysAddr::new(addr)
+    }
+
+    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
+        let base_map = self.base_map();
+        let base_stack = self.base_stack();
+        let phys_limit = self.phys_limit();
+        if ptr >= base_stack {
+            self.stack_addr_to_pa(ptr)
+        } else if ptr >= base_map {
+            self.mmap_addr_to_pa(ptr)
+        } else {
+            PhysAddr::new(ptr.as_u64())
+        }
+    }
+}
+
 pub struct DuneVm {
     root: PageTable,
+    layout: DuneLayout,
 }
 
 impl DuneVm {
 
+    funcs!(layout, DuneLayout);
+
     pub fn new() -> Self {
         DuneVm {
             root: PageTable::new(),
+            layout: DuneLayout::default(),
         }
     }
 

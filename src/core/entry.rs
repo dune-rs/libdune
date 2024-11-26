@@ -2,7 +2,6 @@ use std::ffi::{c_int, c_void};
 use std::io::{self, ErrorKind};
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
-use x86_64::structures::paging::PageTable;
 use lazy_static::lazy_static;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, *};
@@ -72,7 +71,6 @@ use crate::mm::DuneVm;
 
 lazy_static! {
     pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
-    pub static ref LAYOUT: Mutex<DuneLayout> = Mutex::new(DuneLayout::default());
     pub static ref DUNE_DEVICE: Mutex<DuneDevice> = Mutex::new(DuneDevice::new().unwrap());
 }
 
