@@ -63,6 +63,7 @@ pub fn log_init() -> Result<(), SetLoggerError> {
     Ok(())
 }
 
+#[test]
 fn log_test() {
     log_init().unwrap();
     log::info!("This is an info message");

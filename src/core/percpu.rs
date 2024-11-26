@@ -25,7 +25,7 @@ impl Tptr {
 
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, Default)]
-struct Tss {
+pub struct Tss {
     reserved0: u32,
     pub tss_rsp: [u64; 3], // Stack pointer for CPL 0, 1, 2
     reserved1: u64,
@@ -104,7 +104,7 @@ impl DunePercpu {
             let percpu_ptr = ret as *mut DunePercpu;
 
             // map_ptr
-            map_ptr(VirtAddr::from_ptr(percpu_ptr), size_of::<DunePercpu>());
+            let _ = map_ptr(VirtAddr::from_ptr(percpu_ptr), size_of::<DunePercpu>());
 
             let percpu = unsafe { &mut *percpu_ptr };
             percpu.set_kfs_base(fs_base)
@@ -216,7 +216,7 @@ impl DunePercpu {
         let root = dune_vm.get_mut_root();
 
         // map the stack into the Dune address space
-        map_stack();
+        let _ = map_stack();
 
         let mut conf = DuneConfig::default();
         conf.set_vcpu(0)

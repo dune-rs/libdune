@@ -195,7 +195,7 @@ pub unsafe extern "C" fn dune_signal(sig: c_int, cb: *const SigHandler) -> *cons
         return SIG_ERR as *const sighandler_t;
     }
 
-    dune_register_intr_handler(DUNE_SIGNAL_INTR_BASE + sig as usize, *x);
+    let _ = dune_register_intr_handler(DUNE_SIGNAL_INTR_BASE + sig as usize, *x);
 
     ptr::null_mut() as *const sighandler_t
 }

@@ -273,7 +273,7 @@ macro_rules! SEG32 {
 macro_rules! SEG64 {
     ($type:expr, $dpl:expr) => {
         ($type | SEG_S | SEG_P | SEG_G | SEG_L | SEG_A | SEG_DPL!($dpl) | 
-        SEG_LIM!(0xffffffff))
+        SEG_LIM!(0xffffffffu32))
     };
 }
 

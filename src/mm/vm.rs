@@ -73,7 +73,7 @@ impl default::Default for MapPhysData {
     }
 }
 
-pub type PageWalkCb<T: Sized> = fn(arg: *mut T, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()>;
+pub type PageWalkCb<T> = fn(arg: *mut T, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()>;
 
 fn pte_present(pte: &PageTableEntry) -> bool {
     pte.flags().contains(PageTableFlags::PRESENT)
@@ -573,7 +573,7 @@ impl DuneVm {
                 PageTableLevel::Four,
                 CreateType::None,
             ).map_err(|_a|{
-                DuneVm::free(new_root as *mut PageTable);
+                DuneVm::free(new_root as *mut PageTable)
             }).and_then(|()|{
                 Ok(new_root)
             }).ok()
@@ -652,7 +652,7 @@ impl DuneVm {
 
             // Duplicate the page
             let addr = alloc_page();
-            addr.map_or(Err(Error::Unknown), |addr|{
+            let _ = addr.map_or(Err(Error::Unknown), |addr|{
                 let new_page = addr.as_u64() as *mut PageTable;
                 // clear new page
                 ptr::write_bytes(new_page, 0, PGSIZE as usize);

@@ -6,6 +6,7 @@ use libc::{mmap, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_HUGETLB, PROT_READ, 
 use x86_64::PhysAddr;
 use lazy_static::lazy_static;
 use dune_sys::*;
+use crate::{Result,Error};
 
 pub const PAGEBASE: PhysAddr = PhysAddr::new(0x200000000);
 pub const PGSIZE: usize = 4096;
@@ -35,7 +36,7 @@ impl Page {
 }
 
 #[derive(Debug)]
-struct PageManager {
+pub struct PageManager {
     pages: *mut Page,
     free_list: *mut Page,
     page_base: PhysAddr,
@@ -103,6 +104,7 @@ impl PageManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn grow_size(&mut self) -> Result<()> {
         let new_num_pages: usize = self.num_pages + GROW_SIZE;
         let base = (self.page_base + (self.num_pages * PGSIZE) as u64).as_u64() as *mut libc::c_void;
@@ -222,27 +224,32 @@ pub fn dune_page_alloc() -> Result<*mut Page> {
     Ok(a)
 }
 
+#[no_mangle]
 pub fn dune_page_get(pg: *mut Page) -> *mut Page {
     let pm = PAGE_MANAGER.lock().unwrap();
     pm.page_get(pg)
 }
 
+#[no_mangle]
 pub fn dune_page_put(pg: *mut Page) {
     let mut pm = PAGE_MANAGER.lock().unwrap();
     pm.page_put(pg)
 }
 
+#[no_mangle]
 pub fn dune_pa2page(pa: PhysAddr) -> *mut Page {
     let pm = PAGE_MANAGER.lock().unwrap();
     pm.pa2page(pa)
 }
 
+#[no_mangle]
 pub fn dune_page2pa(page: *mut Page) -> PhysAddr {
     let pm = PAGE_MANAGER.lock().unwrap();
     let addr = pm.page2pa(page);
     PhysAddr::new(addr as u64)
 }
 
+#[no_mangle]
 pub fn dune_page_init() -> Result<()> {
     lazy_static::initialize(&PAGE_MANAGER);
     let mut pm = PAGE_MANAGER.lock().unwrap();

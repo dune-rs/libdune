@@ -122,6 +122,7 @@ pub unsafe extern "C" fn dune_dump_trap_frame(tf: &DuneTf) {
     dune_printf("\n");
 }
 
+#[allow(dead_code)]
 unsafe fn dune_syscall_handler(tf: &mut DuneTf) {
     let syscall_cb = SYSCALL_CB.load(Ordering::SeqCst);
     if !syscall_cb.is_null() {

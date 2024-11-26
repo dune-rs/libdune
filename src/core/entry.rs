@@ -133,9 +133,7 @@ impl DuneRoutine for DuneDevice {
                     }
                 },
             }
-        });
-
-        Ok(())
+        })
     }
 
     fn on_dune_exit(&mut self, conf_: *mut DuneConfig) -> ! {
@@ -187,15 +185,18 @@ impl DuneRoutine for DuneDevice {
   * Returns 0 on success, otherwise failure.
   */
 #[no_mangle]
-pub extern "C" fn dune_init(map_full: bool) -> Result<()> {
+pub extern "C" fn dune_init(map_full: bool) -> c_int {
     lazy_static::initialize(&DUNE_DEVICE);
     let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    dune_device.dune_init(map_full).map_err(|e|{
-        let r = Error::Io(io::Error::new(ErrorKind::Other, format!("dune_init() {}", e)));
-        log::error!("{:?}", r);
-        dune_device.close();
-        r
-    })
+    match dune_device.dune_init(map_full) {
+        Ok(_) => 0,
+        Err(e) => {
+            let r = Error::Io(io::Error::new(ErrorKind::Other, format!("dune_init() {}", e)));
+            log::error!("{:?}", r);
+            let _ = dune_device.close();
+            -1
+        }
+    }
 }
 
 /**
@@ -209,10 +210,12 @@ pub extern "C" fn dune_init(map_full: bool) -> Result<()> {
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_enter() -> Result<()> {
+pub unsafe extern "C" fn dune_enter() -> c_int {
     let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    dune_device.dune_enter()?;
-    Ok(())
+    match dune_device.dune_enter() {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
 }
 
 /**
@@ -225,11 +228,15 @@ pub unsafe extern "C" fn dune_enter() -> Result<()> {
  * Returns 0 on success, otherwise failure.
  */
 #[no_mangle]
-pub unsafe extern "C" fn dune_init_and_enter() -> Result<()> {
+pub unsafe extern "C" fn dune_init_and_enter() -> c_int {
     let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    dune_device.dune_init(true)?;
-    dune_device.dune_enter()?;
-    Ok(())
+    if dune_device.dune_init(true).is_err() {
+        return -1;
+    }
+    if dune_device.dune_enter().is_err() {
+        return -1;
+    }
+    0
 }
 
 /**

@@ -177,10 +177,10 @@ where
     let file = File::open("/proc/self/maps")
                         .map_err(|e| Error::Io(e))?;
     let reader = io::BufReader::new(file);
-    reader.lines().map(|line| {
+    let _ = reader.lines().map(|line| {
         if let Ok(line) = line {
             let entry = DuneProcmapEntry::from(line);
-            cb(&entry);
+            let _ = cb(&entry);
         }
     });
 

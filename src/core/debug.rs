@@ -1,4 +1,3 @@
-// #[macro_use]
 use std::os::raw::c_void;
 use std::mem;
 use libc::ioctl;
@@ -15,7 +14,7 @@ extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) 
 
         // We don't need the preemption trap anymore.
         let device = DUNE_DEVICE.lock().unwrap();
-        dune_trap_disable(device.fd());
+        device.trap_disable();
 
         // Copy the TF bit from Linux mode to Dune mode. This way, the program
         // will either single-step or continue depending on what the debugger
