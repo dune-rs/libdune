@@ -265,3 +265,86 @@ pub fn dune_page_stats() {
     let pm = PAGE_MANAGER.lock().unwrap();
     pm.page_stats()
 }
+
+#[test]
+fn test_page() {
+    let mut pm = PageManager::new();
+    pm.page_init().unwrap();
+    pm.page_stats();
+    let page = pm.page_alloc().unwrap();
+    let pa = pm.page2pa(page);
+    assert!(pm.page_isfrompool(pa));
+    println!("pa: {:x}", pa);
+    for i in 0..10 {
+        let page = pm.page_alloc().unwrap();
+        let pa = pm.page2pa(page);
+        println!("pa: {:x}", pa);
+        pm.page_free(page);
+    }
+    pm.page_stats();
+    pm.page_free(page);
+    pm.page_stats();
+}
+
+
+#[test]
+fn test_alloc() {
+    let mut manager = PageManager::new();
+    manager.page_init().unwrap();
+    // let mut manager = manager.lock().unwrap();
+    let page1 = manager.page_alloc();
+    let page2 = manager.page_alloc();
+    assert_eq!(page1.is_some(), true);
+    assert_eq!(page2.is_some(), true);
+    if let Some(page1) = page1 {
+        assert_eq!(manager.page2pa(page1), PAGEBASE+ (PAGE_SIZE * (GROW_SIZE-1)) as u64);
+        manager.page_free(page1);
+    }
+    if let Some(page2) = page2 {
+        assert_eq!(manager.page2pa(page2), PAGEBASE + (PAGE_SIZE * (GROW_SIZE-2)) as u64);
+        manager.page_free(page2);
+    }
+}
+
+#[test]
+fn test_free() {
+    let mut manager = PageManager::new();
+    manager.page_init().unwrap();
+    let page1 = manager.page_alloc();
+    let page2 = manager.page_alloc();
+    assert_eq!(page1.is_some(), true);
+    assert_eq!(page2.is_some(), true);
+    if let Some(page1) = page1 {
+        assert_eq!(manager.page2pa(page1), PAGEBASE + (PAGE_SIZE * (GROW_SIZE-1)) as u64);
+        manager.page_free(page1);
+    }
+    if let Some(page2) = page2 {
+        assert_eq!(manager.page2pa(page2), PAGEBASE + (PAGE_SIZE * (GROW_SIZE-2)) as u64);
+        manager.page_free(page2);
+    }
+    let page3 = manager.page_alloc();
+    assert_eq!(page3.is_some(), true);
+    if let Some(page3) = page3 {
+        assert_eq!(manager.page2pa(page3), PAGEBASE + (PAGE_SIZE * (GROW_SIZE-2)) as u64);
+        manager.page_free(page3);
+    }
+}
+
+#[test]
+fn test_dune_page_alloc() {
+    dune_page_init().unwrap();
+    dune_page_stats();
+    let page = dune_page_alloc().unwrap();
+    let pa = dune_page2pa(page);
+    assert!(dune_page_isfrompool(pa));
+    println!("pa: {:x}", pa);
+    for i in 0..10 {
+        let page = dune_page_alloc().unwrap();
+        let pa = dune_page2pa(page);
+        println!("pa: {:x}", pa);
+        dune_page_free(page);
+    }
+    dune_page_stats();
+    dune_page_free(page);
+    dune_page_stats();
+}
