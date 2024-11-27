@@ -3,7 +3,6 @@ use dune_sys::*;
 use x86_64::VirtAddr;
 use crate::globals::{PERM_BIG, PERM_R, PERM_U, PERM_W, PERM_X};
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
-use crate::core::{*};
 use crate::mm::MmapArgs;
 use crate::utils::rd_rsp;
 use dune_sys::result::Result;
@@ -86,24 +85,6 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "dune")]
-pub fn setup_mappings(full: bool) -> Result<()> {
-    let dune_vm = DUNE_VM.lock().unwrap();
-    let layout = dune_vm.layout();
-
-    if full {
-        __setup_mappings_full(&layout)
-    } else {
-        __setup_mappings_precise()
-    }
-}
-
-#[cfg(not(feature = "dune"))]
-pub fn setup_mappings(full: bool) -> Result<()> {
-    log::warn!("No dune support");
-    Ok(())
-}
-
 pub fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
     // Align the pointer to the page size
     let page = p.align_down(PGSIZE as u64);
@@ -128,8 +109,21 @@ pub fn map_stack() -> Result<()> {
     dune_procmap_iterate(map_stack_cb)
 }
 
-pub trait DuneMapping {
+pub trait DuneMapping : Device {
+
+    fn get_layout(&self) -> Result<DuneLayout> {
+        let mut layout = DuneLayout::default();
+        self.ioctl(DUNE_GET_LAYOUT, &mut layout as *mut DuneLayout as *mut u64)
+            .and_then(|_| Ok(layout))
+    }
+
     fn setup_mappings(&self, full: bool) -> Result<()> {
-        setup_mappings(full)
+        let layout = self.get_layout()?;
+
+        if full {
+            __setup_mappings_full(&layout)
+        } else {
+            __setup_mappings_precise()
+        }
     }
 }

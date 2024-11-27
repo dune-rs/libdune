@@ -6,7 +6,7 @@ use libc::munmap;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, DUNE_GET_LAYOUT, TSS_IOPB};
+use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, TSS_IOPB};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_page_init, get_fs_base, DuneSyscall, PGSIZE};
@@ -165,12 +165,6 @@ impl DuneSystem {
             system: BaseSystem::new(),
         }
     }
-
-    pub fn get_layout(&self) -> Result<DuneLayout> {
-        let mut layout = DuneLayout::default();
-        self.system.ioctl(DUNE_GET_LAYOUT, &mut layout as *mut DuneLayout as *mut u64)
-            .and_then(|_| Ok(layout))
-    }
 }
 
 impl Device for DuneSystem {
@@ -215,7 +209,6 @@ impl DuneRoutine for DuneSystem {
 
         let mut dune_vm = DUNE_VM.lock().unwrap();
         dune_vm.set_layout(self.get_layout()?);
-        // dune_vm.set_lstar(self.get_syscall()?);
 
         dune_page_init()?;
         self.setup_mappings(map_full)?;
