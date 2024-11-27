@@ -291,6 +291,7 @@ impl DuneRoutine for DuneSystem {
 
 impl DuneInterrupt for DuneSystem { }
 impl DuneSignal for DuneSystem { }
+#[cfg(feature = "debug")]
 impl DuneDebug for DuneSystem { }
 impl DuneMapping for DuneSystem { }
 impl DuneSyscall for DuneSystem { }

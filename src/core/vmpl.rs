@@ -4,10 +4,11 @@ use std::sync::Arc;
 use libc::munmap;
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneTrapRegs, Tss, Tptr, IdtDescriptor, Result, WithInterrupt, DuneConfig};
+use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneTrapRegs, Tss, Tptr, IdtDescriptor, Result, WithInterrupt, DuneConfig, DuneRetCode};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{DuneDebug, DuneInterrupt, DuneSignal, PGSIZE};
+use crate::__dune_go_dune;
 
 use super::{DuneRoutine, Percpu, GDT_TEMPLATE, IDT_ENTRIES};
 
@@ -99,6 +100,24 @@ impl VmplSystem {
             system: BaseSystem::new(),
         }
     }
+
+    fn on_dune_syscall(&self, conf: &mut DuneConfig) {
+        conf.set_rax(unsafe {
+            libc::syscall(
+                conf.status() as libc::c_long,
+                conf.rdi(),
+                conf.rsi(),
+                conf.rdx(),
+                conf.r10(),
+                conf.r8(),
+                conf.r9(),
+            )
+        });
+
+        unsafe {
+            __dune_go_dune(self.fd(), conf as *mut DuneConfig)
+        };
+    }
 }
 
 impl Device for VmplSystem {
@@ -148,12 +167,37 @@ impl DuneRoutine for VmplSystem {
     }
 
     fn on_dune_exit(&mut self, conf_: *mut DuneConfig) -> ! {
-        // Implement the on_dune_exit function
-        todo!()
+        let conf = unsafe { &mut *conf_ };
+        let ret: DuneRetCode = conf.ret().into();
+        match ret {
+            DuneRetCode::Exit => {
+                unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
+            }
+            DuneRetCode::Syscall => {
+                self.on_dune_syscall(conf);
+            }
+            DuneRetCode::Interrupt => {
+                #[cfg(feature = "debug")]
+                self.handle_int(conf_);
+                println!("dune: exit due to interrupt {}", conf.status());
+            }
+            DuneRetCode::Signal => {
+                unsafe { __dune_go_dune(self.fd(), conf_) };
+            }
+            DuneRetCode::NoEnter => {
+                log::warn!("dune: re-entry to Dune mode failed, status is {}", conf.status());
+            }
+            _ => {
+                log::warn!("dune: unknown exit from Dune, ret={}, status={}", conf.ret(), conf.status());
+            }
+        }
+
+        std::process::exit(libc::EXIT_FAILURE);
     }
 }
 
 
 impl DuneInterrupt for VmplSystem { }
 impl DuneSignal for VmplSystem { }
+#[cfg(feature = "debug")]
 impl DuneDebug for VmplSystem { }
