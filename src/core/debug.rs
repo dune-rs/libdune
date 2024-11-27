@@ -1,6 +1,4 @@
-use std::os::raw::c_void;
-use std::mem;
-use libc::ioctl;
+use std::{mem, os::raw::c_void, ptr};
 use dune_sys::*;
 
 use crate::globals::*;
@@ -14,7 +12,9 @@ extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) 
 
         // We don't need the preemption trap anymore.
         let device = DUNE_DEVICE.lock().unwrap();
-        device.trap_disable();
+        if (device.trap_disable()).is_err() {
+            panic!("failed to disable trap");
+        }
 
         // Copy the TF bit from Linux mode to Dune mode. This way, the program
         // will either single-step or continue depending on what the debugger
@@ -28,17 +28,11 @@ extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) 
     }
 }
 
-pub trait DuneDebug {
-    fn trap_enable(&mut self, trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void);
-    fn trap_disable(&self);
-    fn handle_int(&mut self, conf: *mut DuneConfig);
-}
+pub trait DuneDebug: Device + WithInterrupt {
 
-impl DuneDebug for DuneDevice {
-
-    fn trap_enable(&mut self, trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void) {
+    fn trap_enable(&mut self, trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void) -> Result<i32> {
         let trap_regs = self.get_trap_regs_mut();
-        let mut trap_conf = DuneTrapConfig::default();
+        let trap_conf = &mut DuneTrapConfig::default();
         trap_conf.set_trigger_rip(trigger_rip)
                 .set_delay(delay)
                 .set_notify_func(func)
@@ -46,23 +40,23 @@ impl DuneDebug for DuneDevice {
                 .set_regs_size(mem::size_of::<DuneTrapRegs>() as u64)
                 .set_priv_data(priv_data);
 
-        unsafe { ioctl(self.fd(), DUNE_TRAP_ENABLE, &trap_conf) };
+        self.ioctl(DUNE_TRAP_ENABLE, trap_conf)
     }
 
-    fn trap_disable(&self) {
-        unsafe { ioctl(self.fd(), DUNE_TRAP_DISABLE) };
+    fn trap_disable(&self) -> Result<i32> {
+        self.ioctl(DUNE_TRAP_DISABLE, ptr::null_mut::<c_void>())
     }
 
     fn handle_int(&mut self, conf: *mut DuneConfig) {
         unsafe {
             match (*conf).status() {
                 1 => {
-                    self.trap_enable( (*conf).rip(), 0, notify_on_resume, conf as *mut c_void);
+                    let _ = self.trap_enable( (*conf).rip(), 0, notify_on_resume, conf as *mut c_void);
                     (*conf).set_rflags((*conf).rflags() | X86_EFLAGS_TF);
                     __dune_go_linux(conf);
                 }
                 3 => {
-                    self.trap_enable( (*conf).rip(), 0, notify_on_resume, conf as *mut c_void);
+                    let _ = self.trap_enable( (*conf).rip(), 0, notify_on_resume, conf as *mut c_void);
                     __dune_go_linux(conf);
                 }
                 _ => {}

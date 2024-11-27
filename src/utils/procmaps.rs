@@ -4,7 +4,7 @@ use std::fmt::Display;
 
 use dune_sys::funcs;
 use x86_64::VirtAddr;
-use crate::result::{Result, Error};
+use dune_sys::result::{Result, Error};
 
 /*
  * procmap.c - Parse linux process map information.

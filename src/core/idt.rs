@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use lazy_static::lazy_static;
 
-use dune_sys::{DuneDevice, IdtDescriptor};
+use dune_sys::{WithInterrupt, IdtDescriptor};
 
 use crate::globals::*;
 
@@ -43,11 +43,7 @@ pub fn setup_idt() {
     __setup_idt(&mut *IDT.lock().unwrap());
 }
 
-pub trait DuneInterrupt {
-    fn setup_idt(&mut self);
-}
-
-impl DuneInterrupt for DuneDevice {
+pub trait DuneInterrupt: WithInterrupt {
     fn setup_idt(&mut self) {
         __setup_idt(self.get_idt_mut());
     }

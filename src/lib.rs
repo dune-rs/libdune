@@ -12,9 +12,8 @@ pub mod fpu;
 pub mod syscall;
 #[macro_use]
 pub mod utils;
-mod result;
 
-pub use result::{Error, Result};
+pub use dune_sys::{Error, Result};
 
 pub use crate::core::*;
 pub use crate::mm::*;

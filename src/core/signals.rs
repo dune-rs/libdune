@@ -1,14 +1,9 @@
 use std::{io::{self, ErrorKind}, mem, ptr};
 
-use dune_sys::DuneDevice;
+use dune_sys::Device;
 use libc::{sigaction, SIG_IGN, SIGTSTP, SIGSTOP, SIGKILL, SIGCHLD, SIGINT, SIGTERM};
 
-
-pub trait DuneSignal {
-    fn setup_signals(&self) -> io::Result<()>;
-}
-
-impl DuneSignal for DuneDevice {
+pub trait DuneSignal : Device {
     fn setup_signals(&self) -> io::Result<()> {
         for i in 1..32 {
             match i {

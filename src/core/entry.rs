@@ -1,12 +1,12 @@
 use std::ffi::{c_int, c_void};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::cell::RefCell;
 use lazy_static::lazy_static;
 use core::arch::global_asm;
-use dune_sys::{DuneConfig, DuneDevice, DuneRetCode, *};
-use crate::{core::*, dune_page_init, Error};
-use crate::syscall::DuneSyscall;
-use crate::result::Result;
+use dune_sys::{DuneConfig, *};
+use crate::core::*;
+use dune_sys::result::Result;
+use crate::mm::DuneVm;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -68,14 +68,7 @@ global_asm!(
 );
 
 thread_local! {
-    static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
-}
-
-use crate::mm::DuneVm;
-
-lazy_static! {
-    pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
-    pub static ref DUNE_DEVICE: Mutex<DuneDevice> = Mutex::new(DuneDevice::new().unwrap());
+    pub static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
 pub trait DuneRoutine {
@@ -84,106 +77,11 @@ pub trait DuneRoutine {
     fn on_dune_exit(&mut self, conf: *mut DuneConfig) -> !;
 }
 
-impl DuneRoutine for DuneDevice {
-    fn dune_init(&mut self, map_full: bool) -> Result<()> {
-        self.open().map_err(|e| Error::LibcError(e))?;
-        // Initialize the Dune VM
-        lazy_static::initialize(&DUNE_VM);
-
-        let mut dune_vm = DUNE_VM.lock().unwrap();
-        dune_vm.init(self.fd())?;
-
-        dune_page_init()?;
-        self.setup_mappings(map_full)?;
-        self.setup_syscall()?;
-
-        self.setup_signals()?;
-
-        self.setup_idt();
-
-        Ok(())
-    }
-
-    fn dune_enter(&mut self) -> Result<()> {
-        let mut device = Arc::new(*self);
-        // Check if this process already entered Dune before a fork...
-        LPERCPU.with(|lpercpu| {
-            let mut lpercpu = lpercpu.borrow_mut();
-            // if not none, enter Dune mode
-            match lpercpu.as_mut() {
-                Some(percpu) => {
-                    percpu.do_dune_enter()
-                },
-                None => {
-                    match DunePercpu::create(&mut device) {
-                        Ok(percpu) => {
-                            percpu.do_dune_enter().map_err(|e|{
-                                DunePercpu::free(percpu);
-                                e
-                            })?;
-                            // if successful, set lpercpu to Some(percpu)
-                            // let a = *lpercpu;
-                            // a.replace(percpu);
-                            Ok(())
-                        },
-                        Err(e) => {
-                            // if still none, return error
-                            Err(e)
-                        }
-                    }
-                },
-            }
-        })
-    }
-
-    fn on_dune_exit(&mut self, conf_: *mut DuneConfig) -> ! {
-        let conf = unsafe { &*conf_ };
-        let ret: DuneRetCode = conf.ret().into();
-        match ret {
-            DuneRetCode::Exit => {
-                unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
-            },
-            DuneRetCode::EptViolation => {
-                println!("dune: exit due to EPT violation");
-            },
-            DuneRetCode::Interrupt => {
-                #[cfg(feature = "debug")]
-                self.handle_int(conf_);
-                println!("dune: exit due to interrupt {}", conf.status());
-            },
-            DuneRetCode::Signal => {
-                unsafe { __dune_go_dune(self.fd(), conf_) };
-            },
-            DuneRetCode::UnhandledVmexit => {
-                println!("dune: exit due to unhandled VM exit");
-            },
-            DuneRetCode::NoEnter => {
-                println!("dune: re-entry to Dune mode failed, status is {}", conf.status());
-            },
-            _ => {
-                println!("dune: unknown exit from Dune, ret={}, status={}", conf.ret(), conf.status());
-            },
-        }
-
-        unsafe { libc::exit(libc::EXIT_FAILURE) };
-    }
+lazy_static! {
+    pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
+    pub static ref DUNE_DEVICE: Mutex<DuneSystem> = Mutex::new(DuneSystem::new());
 }
 
- /**
-  * dune_init - initializes libdune
-  *
-  * @map_full: determines if the full process address space should be mapped
-  *
-  * Call this function once before using libdune.
-  *
-  * Dune supports two memory modes. If map_full is true, then every possible
-  * address in the process address space is mapped. Otherwise, only addresses
-  * that are used (e.g. set up through mmap) are mapped. Full mapping consumes
-  * a lot of memory when enabled, but disabling it incurs slight overhead
-  * since pages will occasionally need to be faulted in.
-  *
-  * Returns 0 on success, otherwise failure.
-  */
 #[no_mangle]
 pub extern "C" fn dune_init(map_full: bool) -> c_int {
     lazy_static::initialize(&DUNE_DEVICE);

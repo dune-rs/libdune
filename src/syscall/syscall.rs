@@ -7,13 +7,12 @@ use libc::PROT_EXEC;
 use libc::PROT_READ;
 use libc::PROT_WRITE;
 use x86_64::structures::paging::PageTable;
-use dune_sys::*;
 
 use crate::PGSIZE;
 use crate::globals::PERM_R;
 use crate::core::{*};
 use crate::mm::MmapArgs;
-use crate::result::{Error, Result};
+use dune_sys::result::{Error, Result};
 
 #[cfg(all(feature = "dune", feature = "syscall"))]
 pub fn setup_syscall() -> Result<()> {
@@ -59,7 +58,7 @@ pub trait DuneSyscall {
     fn setup_syscall(&self) -> Result<()>;
 }
 
-impl DuneSyscall for DuneDevice {
+impl DuneSyscall for DuneSystem {
 
     fn setup_syscall(&self) -> Result<()> {
         setup_syscall()

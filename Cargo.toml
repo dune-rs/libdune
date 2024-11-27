@@ -5,8 +5,7 @@ edition = "2021"
 build = "build.rs"
 
 [features]
-# default = ["dune", "signal", "debug"]
-default = ["dune", "signal", "debug", "mm", "syscall"]
+default = ["dune", "signal", "debug", "mm", "syscall", "vmpl"]
 test = []
 signal = []
 syscall = []

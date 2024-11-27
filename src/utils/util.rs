@@ -11,7 +11,7 @@ use std::fmt::Write;
 
 use crate::{core::*, Error};
 use crate::globals::{ARCH_GET_FS, ARCH_SET_FS};
-use crate::result::Result;
+use dune_sys::result::Result;
 
 type SigHandler = extern "C" fn(c_int);
 
