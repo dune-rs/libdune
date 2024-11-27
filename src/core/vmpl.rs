@@ -58,7 +58,7 @@ impl Percpu for VmplPercpu {
         Tptr::default()
     }
 
-    fn idtr(&self) -> Tptr {
+    fn idtr(&mut self) -> Tptr {
         // Implement the idtr function
         Tptr::default()
     }
@@ -121,6 +121,10 @@ impl Device for VmplSystem {
 }
 
 impl WithInterrupt for VmplSystem {
+
+    fn get_idt<'a>(&self) -> &[IdtDescriptor; IDT_ENTRIES] {
+        self.system.get_idt()
+    }
 
     fn get_idt_mut<'a>(&mut self) -> &mut [IdtDescriptor; IDT_ENTRIES] {
         self.system.get_idt_mut()

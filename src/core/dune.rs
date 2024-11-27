@@ -11,7 +11,7 @@ use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneLayout, Dun
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_page_init, get_fs_base, DuneSyscall, PGSIZE};
 
-use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, DUNE_VM, GDT_TEMPLATE, IDT, IDT_ENTRIES, LPERCPU};
+use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, DUNE_VM, GDT_TEMPLATE, IDT_ENTRIES, LPERCPU};
 use super::DuneSignal;
 
 pub struct DunePercpu {
@@ -86,18 +86,18 @@ impl Percpu for DunePercpu {
     }
 
     fn gdtr(&self) -> Tptr {
-        let gdt_ptr = std::ptr::addr_of!(self.gdt);
         let mut gdtr = Tptr::default();
         unsafe {
+            let gdt_ptr = std::ptr::addr_of!(self.gdt);
             let size = (*gdt_ptr).len() * mem::size_of::<u64>() - 1;
             gdtr.set_base(gdt_ptr as u64)
-            .set_limit(size as u16);
+                .set_limit(size as u16);
         }
         gdtr
     }
 
-    fn idtr(&self) -> Tptr {
-        let idt = IDT.lock().unwrap();
+    fn idtr(&mut self) -> Tptr {
+        let idt = self.system().get_idt();
         let mut idtr = Tptr::default();
         idtr.set_base(idt.as_ptr() as u64)
             .set_limit((idt.len() * mem::size_of::<IdtDescriptor>() - 1) as u16);
@@ -105,11 +105,11 @@ impl Percpu for DunePercpu {
     }
 
     fn system(&self) -> &Arc<Self::SystemType> {
-        &self.system
+        todo!()
     }
 
     fn set_system(&mut self, system: &Arc<Self::SystemType>) {
-        self.system = Arc::clone(system);
+        todo!()
     }
 
     fn setup_safe_stack(&mut self) -> Result<()> {
@@ -199,6 +199,10 @@ impl Device for DuneSystem {
 }
 
 impl WithInterrupt for DuneSystem {
+
+    fn get_idt<'a>(&self) -> &[IdtDescriptor; IDT_ENTRIES] {
+        self.system.get_idt()
+    }
 
     fn get_idt_mut<'a>(&mut self) -> &mut [IdtDescriptor; IDT_ENTRIES] {
         self.system.get_idt_mut()

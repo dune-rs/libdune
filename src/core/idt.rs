@@ -1,15 +1,8 @@
-use std::sync::Mutex;
-use lazy_static::lazy_static;
-
 use dune_sys::{WithInterrupt, IdtDescriptor};
 
 use crate::globals::*;
 
 use super::__dune_intr;
-
-lazy_static! {
-    pub static ref IDT: Mutex<[IdtDescriptor; IDT_ENTRIES]> = Mutex::new([IdtDescriptor::default(); IDT_ENTRIES]);
-}
 
 const ISR_LEN: usize = 16;
 
@@ -36,11 +29,6 @@ pub fn __setup_idt(idt: &mut [IdtDescriptor]) {
         id.set_idt_addr(isr);
         isr += ISR_LEN;
     }
-}
-
-pub fn setup_idt() {
-    lazy_static::initialize(&IDT);
-    __setup_idt(&mut *IDT.lock().unwrap());
 }
 
 pub trait DuneInterrupt: WithInterrupt {

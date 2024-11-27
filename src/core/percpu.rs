@@ -72,7 +72,7 @@ pub trait Percpu {
 
     fn gdtr(&self) -> Tptr;
 
-    fn idtr(&self) -> Tptr;
+    fn idtr(&mut self) -> Tptr;
 
     fn setup_gdt(&mut self);
 
