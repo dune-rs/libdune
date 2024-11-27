@@ -97,10 +97,14 @@ fn check_cpu_features() -> Result<()> {
     for line in reader.lines() {
         let line = line.map_err(|_| Error::LibcError(Errno::ENOENT))?;
         if line.contains("vmx") {
+            log::info!("Intel VT-x found");
             has_vmx = true;
+            break;
         }
-        if line.contains("sev-snp") {
+        if line.contains("svm") {
+            log::info!("AMD SVM found");
             has_sev_snp = true;
+            break;
         }
     }
 
