@@ -4,7 +4,7 @@ use std::sync::Arc;
 use libc::munmap;
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_vec, funcs_ref, BaseSystem, Device, DuneTrapRegs, Tss, Tptr, IdtDescriptor, Result, WithInterrupt, DuneConfig};
+use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneTrapRegs, Tss, Tptr, IdtDescriptor, Result, WithInterrupt, DuneConfig};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{DuneDebug, DuneInterrupt, DuneSignal, PGSIZE};
@@ -28,7 +28,6 @@ impl VmplPercpu {
     funcs!(kfs_base, VirtAddr);
     funcs!(ufs_base, VirtAddr);
     funcs!(in_usermode, u64);
-    funcs_ref!(system, Arc<VmplSystem>);
     funcs_vec!(gdt, u64);
 
     pub fn free(ptr: *mut VmplPercpu) {
@@ -41,6 +40,8 @@ impl Percpu for VmplPercpu {
 
     type SelfType = VmplPercpu;
     type SystemType = VmplSystem;
+
+    // fn init(&self) -> Result<&mut Self::SelfType>;
 
     fn prepare(&mut self) -> Result<()> {
         // Implement the prepare function
@@ -62,12 +63,12 @@ impl Percpu for VmplPercpu {
         Tptr::default()
     }
 
-    fn system(&self) -> &Arc<VmplSystem> {
+    fn system(&self) -> &Arc<Self::SystemType> {
         &self.system
     }
 
-    fn set_system(&mut self, system: Arc<VmplSystem>) {
-        self.system = system;
+    fn set_system(&mut self, system: &Arc<Self::SystemType>) {
+        self.system = Arc::clone(system);
     }
 
     fn post_dune_boot(&mut self) {

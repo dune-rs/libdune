@@ -3,7 +3,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::ptr;
 use dune_sys::{Device, DuneConfig, Tptr};
-use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, munmap, MAP_FAILED};
+use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, MAP_FAILED};
 use nix::errno::Errno;
 use x86_64::VirtAddr;
 use crate::{dune_die, get_fs_base, globals::*, PGSIZE};
@@ -27,7 +27,7 @@ pub trait Percpu {
     type SelfType: Percpu;
     type SystemType: Device;
 
-    fn map_ptr(&self, ret: *mut c_void) -> Result<()> {
+    fn map_ptr(&self, ret: *mut Self::SelfType) -> Result<()> {
         let ptr = VirtAddr::from_ptr(ret);
         let ret = map_ptr(ptr, size_of::<Self::SelfType>());
         if ret.is_err() {
@@ -37,9 +37,9 @@ pub trait Percpu {
         Ok(())
     }
 
-    fn create(system: &Arc<DuneSystem>) -> Result<&mut Self::SelfType> {
+    fn create() -> Result<*mut Self::SelfType> {
         let fs_base = get_fs_base()?;
-        let percpu = unsafe {
+        unsafe {
             let ret = mmap(
                 ptr::null_mut(),
                 PGSIZE as usize,
@@ -51,27 +51,8 @@ pub trait Percpu {
             if ret == MAP_FAILED {
                 return Err(Error::LibcError(Errno::last()));
             }
-            Ok(ret)
-        };
-
-        percpu.and_then(|ret| {
-            let percpu_ptr = ret as *mut Self::SelfType;
-
-            // map_ptr
-            let _ = map_ptr(VirtAddr::from_ptr(percpu_ptr), size_of::<Self::SelfType>());
-
-            let percpu = unsafe { &mut *percpu_ptr };
-            match percpu.prepare() {
-                Ok(()) => {
-                    // percpu.set_system(Arc::clone(system));
-                    Ok(percpu)
-                },
-                Err(e) => {
-                    unsafe { munmap(percpu_ptr as *mut c_void, PGSIZE as usize) };
-                    return Err(e);
-                },
-            }
-        })
+            Ok(ret as *mut Self::SelfType)
+        }
     }
 
     fn prepare(&mut self) -> Result<()>;
@@ -97,7 +78,7 @@ pub trait Percpu {
 
     fn system(&self) -> &Arc<Self::SystemType>;
 
-    fn set_system(&mut self, system: Arc<Self::SystemType>);
+    fn set_system(&mut self, system: &Arc<Self::SystemType>);
 
     /**
      * dune_boot - Brings the user-level OS online

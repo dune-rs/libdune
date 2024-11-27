@@ -6,7 +6,7 @@ use libc::munmap;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_ref, funcs_vec, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, DUNE_GET_LAYOUT, DUNE_GET_SYSCALL, TSS_IOPB};
+use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, DUNE_GET_LAYOUT, DUNE_GET_SYSCALL, TSS_IOPB};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_page_init, get_fs_base, DuneSyscall, PGSIZE};
@@ -40,7 +40,6 @@ impl DunePercpu {
     funcs!(kfs_base, VirtAddr);
     funcs!(ufs_base, VirtAddr);
     funcs!(in_usermode, u64);
-    funcs_ref!(system, Arc<DuneSystem>);
     funcs_vec!(gdt, u64);
 
     pub fn free(ptr: *mut DunePercpu) {
@@ -109,8 +108,8 @@ impl Percpu for DunePercpu {
         &self.system
     }
 
-    fn set_system(&mut self, system: Arc<DuneSystem>) {
-        self.system = system;
+    fn set_system(&mut self, system: &Arc<Self::SystemType>) {
+        self.system = Arc::clone(system);
     }
 
     fn setup_safe_stack(&mut self) -> Result<()> {
@@ -133,7 +132,8 @@ impl Percpu for DunePercpu {
         self.set_kfs_base(fs_base)
             .set_ufs_base(fs_base)
             .set_in_usermode(0)
-            .setup_safe_stack()
+            .setup_safe_stack()?;
+        Ok(())
     }
 
     fn post_dune_boot(&mut self) {
@@ -231,7 +231,7 @@ impl DuneRoutine for DuneSystem {
     }
 
     fn dune_enter(&mut self) -> Result<()> {
-        let mut device = Arc::new(*self);
+        let system = Arc::new(*self);
         // Check if this process already entered Dune before a fork...
         LPERCPU.with(|lpercpu| {
             let mut lpercpu = lpercpu.borrow_mut();
@@ -241,22 +241,26 @@ impl DuneRoutine for DuneSystem {
                     percpu.do_dune_enter()
                 },
                 None => {
-                    match DunePercpu::create(&mut device) {
-                        Ok(percpu) => {
-                            percpu.do_dune_enter().map_err(|e|{
-                                DunePercpu::free(percpu);
-                                e
-                            })?;
-                            // if successful, set lpercpu to Some(percpu)
-                            // let a = *lpercpu;
-                            // a.replace(percpu);
-                            Ok(())
-                        },
-                        Err(e) => {
-                            // if still none, return error
-                            Err(e)
+                    let percpu = DunePercpu::create();
+                    percpu.and_then(|percpu_ptr| {
+                        let percpu = unsafe { &mut *percpu_ptr };
+                        percpu.map_ptr(percpu_ptr)?;
+                        match percpu.prepare() {
+                            Ok(()) => {
+                                percpu.set_system(&system);
+                                Ok(percpu)
+                            },
+                            Err(e) => {
+                                DunePercpu::free(percpu_ptr);
+                                Err(e)
+                            },
                         }
-                    }
+                    }).and_then(|percpu| {
+                        percpu.do_dune_enter().map_err(|e|{
+                            DunePercpu::free(percpu);
+                            e
+                        })
+                    })
                 },
             }
         })
