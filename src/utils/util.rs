@@ -169,26 +169,28 @@ pub unsafe extern "C" fn dune_die() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dune_passthrough_syscall(tf: &mut DuneTf) {
+pub extern "C" fn dune_passthrough_syscall(tf: &mut DuneTf) {
     let mut rax = tf.rax();
-    asm!(
-        "movq {0}, %rdi",
-        "movq {1}, %rsi",
-        "movq {2}, %rdx",
-        "movq {3}, %r10",
-        "movq {4}, %r8",
-        "movq {5}, %r9",
-        "vmcall",
-        "movq %rax, {6}",
-        in(reg) tf.rdi(),
-        in(reg) tf.rsi(),
-        in(reg) tf.rdx(),
-        in(reg) tf.rcx(),
-        in(reg) tf.r8(),
-        in(reg) tf.r9(),
-        inout(reg) rax,
-        options(nostack, att_syntax),
-    );
+    unsafe {
+        asm!(
+            "movq {0}, %rdi",
+            "movq {1}, %rsi",
+            "movq {2}, %rdx",
+            "movq {3}, %r10",
+            "movq {4}, %r8",
+            "movq {5}, %r9",
+            "vmcall",
+            "movq %rax, {6}",
+            in(reg) tf.rdi(),
+            in(reg) tf.rsi(),
+            in(reg) tf.rdx(),
+            in(reg) tf.rcx(),
+            in(reg) tf.r8(),
+            in(reg) tf.r9(),
+            inout(reg) rax,
+            options(nostack, att_syntax),
+        );
+    }
     tf.set_rax(rax);
 }
 

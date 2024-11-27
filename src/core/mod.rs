@@ -13,6 +13,7 @@ mod trap;
 #[cfg(feature = "signal")]
 mod signals;
 mod idt;
+pub mod user;
 
 #[cfg(feature = "debug")]
 pub use crate::core::debug::*;
