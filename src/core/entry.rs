@@ -2,10 +2,14 @@ use std::ffi::{c_int, c_void};
 use std::sync::Mutex;
 use std::cell::RefCell;
 use lazy_static::lazy_static;
+use nix::errno::Errno;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, *};
 use crate::core::*;
 use dune_sys::result::Result;
+use std::fs::File;
+use std::io::{self, BufRead};
+use std::path::Path;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -70,27 +74,65 @@ thread_local! {
     pub static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
-pub trait DuneRoutine {
+pub trait DuneRoutine : Send + Sync {
+    fn as_any(&self) -> &dyn std::any::Any;
     fn dune_init(&mut self, map_full: bool) -> Result<()>;
     fn dune_enter(&mut self) -> Result<()>;
     fn on_dune_exit(&mut self, conf: *mut DuneConfig) -> !;
 }
 
 lazy_static! {
-    pub static ref DUNE_DEVICE: Mutex<DuneSystem> = Mutex::new(DuneSystem::new());
+    pub static ref DEVICE: Mutex<Option<Box<dyn DuneRoutine>>> = Mutex::new(None);
+}
+
+fn check_cpu_features() -> Result<()> {
+    let path = Path::new("/proc/cpuinfo");
+    let file = File::open(&path)
+                    .map_err(|_| Error::LibcError(Errno::ENOENT))?;
+    let reader = io::BufReader::new(file);
+
+    let mut has_vmx = false;
+    let mut has_sev_snp = false;
+
+    for line in reader.lines() {
+        let line = line.map_err(|_| Error::LibcError(Errno::ENOENT))?;
+        if line.contains("vmx") {
+            has_vmx = true;
+        }
+        if line.contains("sev-snp") {
+            has_sev_snp = true;
+        }
+    }
+
+    if has_vmx {
+        *DEVICE.lock().unwrap() = Some(Box::new(DuneSystem::new()));
+        Ok(())
+    } else if has_sev_snp {
+        *DEVICE.lock().unwrap() = Some(Box::new(VmplSystem::new()));
+        Ok(())
+    } else {
+        Err(Error::LibcError(Errno::ENOTSUP))
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn dune_init(map_full: bool) -> c_int {
-    lazy_static::initialize(&DUNE_DEVICE);
-    let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    match dune_device.dune_init(map_full) {
-        Ok(_) => 0,
-        Err(e) => {
-            log::error!("dune_init() {}", e);
-            let _ = dune_device.close();
-            libc::EXIT_FAILURE
+    lazy_static::initialize(&DEVICE);
+    if let Err(e) = check_cpu_features() {
+        log::error!("dune_init() {}", e);
+        return libc::EXIT_FAILURE;
+    }
+
+    if let Some(ref mut device) = *DEVICE.lock().unwrap() {
+        match device.dune_init(map_full) {
+            Ok(_) => 0,
+            Err(e) => {
+                log::error!("dune_init() {}", e);
+                libc::EXIT_FAILURE
+            }
         }
+    } else {
+        libc::EXIT_FAILURE
     }
 }
 
@@ -106,8 +148,8 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
  */
 #[no_mangle]
 pub extern "C" fn dune_enter() -> c_int {
-    let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    match dune_device.dune_enter() {
+    let mut device = DEVICE.lock().unwrap();
+    match device.as_mut().unwrap().dune_enter() {
         Ok(_) => 0,
         Err(_) => -1,
     }
@@ -140,6 +182,6 @@ pub extern "C" fn dune_init_and_enter() -> c_int {
  */
 #[no_mangle]
 pub unsafe extern "C" fn on_dune_exit(conf: *mut DuneConfig) -> ! {
-    let mut dune_device = DUNE_DEVICE.lock().unwrap();
-    dune_device.on_dune_exit(conf);
+    let mut device = DEVICE.lock().unwrap();
+    device.as_mut().unwrap().on_dune_exit(conf);
 }

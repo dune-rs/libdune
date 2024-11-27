@@ -1,6 +1,8 @@
 
 use std::arch::x86_64::{_fxsave, _fxrstor, _xsave, _xrstor, _xsaveopt};
 
+use crate::Percpu;
+
 #[repr(C, align(16))]
 pub struct FxSaveArea {
     pub fcw: u16,
@@ -113,4 +115,48 @@ pub fn dune_fpu_save_safe(fp: *mut FxSaveArea) {
     unsafe {
         (*fp).save();
     }
+}
+
+pub trait WithDuneFpu : Percpu {
+
+    fn fpu_init(&self) {
+        let fp = self.get_fpu();
+        dune_fpu_init(fp);
+    }
+
+    fn fpu_load(&self) {
+        let fp = self.get_fpu();
+        dune_fpu_load(fp);
+    }
+
+    fn fpu_save(&self) {
+        let fp = self.get_fpu();
+        dune_fpu_save(fp);
+    }
+
+    fn fpu_save_safe(&self) {
+        let fp = self.get_fpu();
+        dune_fpu_save_safe(fp);
+    }
+
+    fn get_fpu(&self) -> *mut FxSaveArea;
+}
+
+pub trait WithVmplFpu : Percpu {
+
+    fn xsave_begin(&self) {
+        let xs = self.get_xsaves_area();
+        unsafe {
+            _xsave(xs as *mut _ as *mut u8, 0x3);
+        }
+    }
+
+    fn xsave_end(&self) {
+        let xs = self.get_xsaves_area();
+        unsafe {
+            _xrstor(xs as *const _ as *const u8, 0x3);
+        }
+    }
+
+    fn get_xsaves_area(&self) -> *mut XSaveArea;
 }

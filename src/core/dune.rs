@@ -1,16 +1,17 @@
+use std::any::Any;
 use std::arch::asm;
 use std::ffi::{c_int, c_void};
 use std::mem::{self, offset_of};
 use std::sync::Arc;
-use libc::munmap;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, TSS_IOPB};
+use dune_sys::{funcs, funcs_vec, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, TSS_IOPB};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
-use crate::{dune_vm_init, get_fs_base, DuneSyscall, DUNE_VM, PGSIZE};
+use crate::{dune_vm_init, get_fs_base, DuneSyscall, FxSaveArea, WithDuneFpu, DUNE_VM, PGSIZE};
 
+use super::cpuset::WithCpuset;
 use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, GDT_TEMPLATE, IDT_ENTRIES, LPERCPU};
 use super::DuneSignal;
 
@@ -20,9 +21,10 @@ pub struct DunePercpu {
     kfs_base: VirtAddr,
     ufs_base: VirtAddr,
     in_usermode: u64,
-    system: Arc<DuneSystem>,
     pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
+    vcpu_fd: BaseDevice,
+    system: Arc<DuneSystem>,
 }
 
 /*
@@ -40,12 +42,8 @@ impl DunePercpu {
     funcs!(kfs_base, VirtAddr);
     funcs!(ufs_base, VirtAddr);
     funcs!(in_usermode, u64);
+    funcs!(vcpu_fd, BaseDevice);
     funcs_vec!(gdt, u64);
-
-    pub fn free(ptr: *mut DunePercpu) {
-        // XXX free stack
-        unsafe { munmap(ptr as *const _ as *mut c_void, PGSIZE as usize) };
-    }
 
     fn get_user_fs() -> u64 {
         let ptr: u64;
@@ -69,6 +67,25 @@ impl DunePercpu {
                 options(nostack, preserves_flags)
             );
         }
+    }
+}
+
+impl Device for DunePercpu {
+
+    fn fd(&self) -> c_int {
+        self.vcpu_fd.fd()
+    }
+
+    fn open(&mut self, path: &str) -> Result<i32> {
+        self.vcpu_fd.open(path)
+    }
+
+    fn close(&self) -> Result<i32> {
+        self.vcpu_fd.close()
+    }
+
+    fn ioctl<T>(&self, request: u64, arg: *mut T) -> Result<i32> {
+        self.vcpu_fd.ioctl(request, arg)
     }
 }
 
@@ -202,6 +219,11 @@ impl WithInterrupt for DuneSystem {
 }
 
 impl DuneRoutine for DuneSystem {
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn dune_init(&mut self, map_full: bool) -> Result<()> {
         self.open("/dev/dune")?;
         // Initialize the Dune VM
@@ -295,3 +317,11 @@ impl DuneSignal for DuneSystem { }
 impl DuneDebug for DuneSystem { }
 impl DuneMapping for DuneSystem { }
 impl DuneSyscall for DuneSystem { }
+
+impl WithCpuset for DunePercpu { }
+impl WithDuneFpu for DunePercpu {
+
+    fn get_fpu(&self) -> *mut FxSaveArea {
+        todo!()
+    }
+}

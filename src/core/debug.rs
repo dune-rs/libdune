@@ -1,9 +1,9 @@
-use std::{mem, os::raw::c_void, ptr};
+use std::{any::Any, mem, os::raw::c_void, ptr};
 use dune_sys::*;
 
 use crate::globals::*;
 
-use super::{__dune_go_dune, __dune_go_linux, DUNE_DEVICE};
+use super::{DuneSystem, __dune_go_dune, __dune_go_linux, DEVICE};
 
 #[no_mangle]
 extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) -> ! {
@@ -11,24 +11,34 @@ extern "C" fn notify_on_resume(regs: *mut DuneTrapRegs, priv_data: *mut c_void) 
         let dune_conf = &mut *(priv_data as *mut DuneConfig);
 
         // We don't need the preemption trap anymore.
-        let device = DUNE_DEVICE.lock().unwrap();
-        if (device.trap_disable()).is_err() {
-            panic!("failed to disable trap");
+        let device = DEVICE.lock().unwrap();
+        if let Some(device) = device.as_ref() {
+            // if the device has DuneDebug trait, then next
+            let device = device.as_any().downcast_ref::<DuneSystem>();
+            if let Some(device) = device {
+                if device.trap_disable().is_err() {
+                    panic!("failed to disable trap");
+                }
+
+                // Copy the TF bit from Linux mode to Dune mode. This way, the program
+                // will either single-step or continue depending on what the debugger
+                // wants the program to do.
+                dune_conf.set_rflags(dune_conf.rflags() & !X86_EFLAGS_TF);
+                dune_conf.set_rflags(dune_conf.rflags() | (*regs).rflags() & X86_EFLAGS_TF);
+
+                // Continue in Dune mode.
+                __dune_go_dune(device.fd(), dune_conf);
+                // It doesn't return.
+            } else {
+                panic!("device does not implement DuneDebug trait");
+            }
+        } else {
+            panic!("device is None");
         }
-
-        // Copy the TF bit from Linux mode to Dune mode. This way, the program
-        // will either single-step or continue depending on what the debugger
-        // wants the program to do.
-        dune_conf.set_rflags(dune_conf.rflags() & !X86_EFLAGS_TF);
-        dune_conf.set_rflags(dune_conf.rflags() | (*regs).rflags() & X86_EFLAGS_TF);
-
-        // Continue in Dune mode.
-        __dune_go_dune(device.fd(), dune_conf);
-        // It doesn't return.
     }
 }
 
-pub trait DuneDebug: Device + WithInterrupt {
+pub trait DuneDebug: Device + WithInterrupt + Any {
 
     fn trap_enable(&mut self, trigger_rip: u64, delay: u8, func: DuneTrapNotifyFunc, priv_data: *mut c_void) -> Result<i32> {
         let trap_regs = self.get_trap_regs_mut();

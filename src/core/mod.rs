@@ -15,6 +15,7 @@ mod trap;
 mod mapping;
 #[cfg(feature = "signal")]
 mod signals;
+mod cpuset;
 mod idt;
 pub mod user;
 

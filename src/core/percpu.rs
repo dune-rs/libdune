@@ -3,7 +3,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::ptr;
 use dune_sys::{Device, DuneConfig, Tptr};
-use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, MAP_FAILED};
+use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use nix::errno::Errno;
 use x86_64::VirtAddr;
 use crate::{dune_die, get_fs_base, globals::*, DUNE_VM, PGSIZE};
@@ -26,6 +26,11 @@ pub trait Percpu {
 
     type SelfType: Percpu;
     type SystemType: Device;
+
+    // XXX free stack
+    fn free(ptr: *mut Self::SelfType) {
+        unsafe { munmap(ptr as *const _ as *mut c_void, PGSIZE as usize) };
+    }
 
     fn map_ptr(&self, ret: *mut Self::SelfType) -> Result<()> {
         let ptr = VirtAddr::from_ptr(ret);
@@ -92,30 +97,37 @@ pub trait Percpu {
         unsafe {
             asm!(
                 // STEP 1: load the new GDT
-                "lgdt [{0}]",
+                "lgdt ({0})",
+
                 // STEP 2: initialize data segments
-                "mov ax, {1:x}",
-                "mov ds, ax",
-                "mov es, ax",
-                "mov ss, ax",
+                "mov {1:x}, %ax",
+                "mov %ax, %ds",
+                "mov %ax, %es",
+                "mov %ax, %ss",
+
                 // STEP 3: long jump into the new code segment
-                "mov rax, {2}",
-                "push rax",
-                "push 2f",
-                "retfq",
+                "mov {2:r}, %rax",
+                "pushq %rax",
+                "leaq 2f(%rip), %rax",
+                "pushq %rax",
+                "lretq",
                 "2:",
                 "nop",
+
                 // STEP 4: load the task register (for safe stack switching)
-                "mov ax, {3:x}",
-                "ltr ax",
+                "mov {3:x}, %ax",
+                "ltr %ax",
+
                 // STEP 5: load the new IDT and enable interrupts
-                "lidt [{4}]",
+                "lidt ({4})",
                 "sti",
+
                 in(reg) &gdtr,
                 in(reg) GD_KD,
                 in(reg) GD_KT,
                 in(reg) GD_TSS,
-                in(reg) &idtr
+                in(reg) &idtr,
+                options(nostack, preserves_flags, att_syntax)
             );
         }
 
