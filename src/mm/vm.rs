@@ -229,19 +229,16 @@ impl From<&DuneProcmapEntry> for MmapArgs {
 pub struct DuneVm {
     root: PageTable,
     layout: DuneLayout,
-    lstar: VirtAddr,
 }
 
 impl DuneVm {
 
     funcs!(layout, DuneLayout);
-    funcs!(lstar, VirtAddr);
 
     pub fn new() -> Self {
         DuneVm {
             root: PageTable::new(),
             layout: DuneLayout::default(),
-            lstar: VirtAddr::zero(),
         }
     }
 

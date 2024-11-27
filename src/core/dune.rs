@@ -6,7 +6,7 @@ use libc::munmap;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, DUNE_GET_LAYOUT, DUNE_GET_SYSCALL, TSS_IOPB};
+use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, DUNE_GET_LAYOUT, TSS_IOPB};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_page_init, get_fs_base, DuneSyscall, PGSIZE};
@@ -171,12 +171,6 @@ impl DuneSystem {
         self.system.ioctl(DUNE_GET_LAYOUT, &mut layout as *mut DuneLayout as *mut u64)
             .and_then(|_| Ok(layout))
     }
-
-    pub fn get_syscall(self) -> Result<VirtAddr> {
-        let arg: u64 = 0;
-        self.system.ioctl(DUNE_GET_SYSCALL, &arg as *const u64 as *mut u64)
-            .and_then(|e| Ok(VirtAddr::new(e as u64)))
-    }
 }
 
 impl Device for DuneSystem {
@@ -221,7 +215,7 @@ impl DuneRoutine for DuneSystem {
 
         let mut dune_vm = DUNE_VM.lock().unwrap();
         dune_vm.set_layout(self.get_layout()?);
-        dune_vm.set_lstar(self.get_syscall()?);
+        // dune_vm.set_lstar(self.get_syscall()?);
 
         dune_page_init()?;
         self.setup_mappings(map_full)?;
@@ -307,3 +301,4 @@ impl DuneInterrupt for DuneSystem { }
 impl DuneSignal for DuneSystem { }
 impl DuneDebug for DuneSystem { }
 impl DuneMapping for DuneSystem { }
+impl DuneSyscall for DuneSystem { }
