@@ -6,7 +6,6 @@ use core::arch::global_asm;
 use dune_sys::{DuneConfig, *};
 use crate::core::*;
 use dune_sys::result::Result;
-use crate::mm::DuneVm;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -78,7 +77,6 @@ pub trait DuneRoutine {
 }
 
 lazy_static! {
-    pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
     pub static ref DUNE_DEVICE: Mutex<DuneSystem> = Mutex::new(DuneSystem::new());
 }
 

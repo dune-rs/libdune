@@ -6,7 +6,7 @@ use dune_sys::{Device, DuneConfig, Tptr};
 use libc::{mmap, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS, MAP_FAILED};
 use nix::errno::Errno;
 use x86_64::VirtAddr;
-use crate::{dune_die, get_fs_base, globals::*, PGSIZE};
+use crate::{dune_die, get_fs_base, globals::*, DUNE_VM, PGSIZE};
 use crate::core::*;
 use dune_sys::result::{Result, Error};
 

@@ -3,7 +3,6 @@
  */
 use dune_sys::trap::DuneTf;
 use x86_64::VirtAddr;
-use crate::core::*;
 use crate::mm::*;
 use crate::utils::*;
 use crate::globals::*;

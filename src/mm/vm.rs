@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::{default, ptr};
 use dune_sys::{funcs, DuneLayout};
 use libc::c_void;
@@ -7,7 +8,8 @@ use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
 use x86_64::{structures::paging::page_table::PageTableEntry, PhysAddr};
 use x86_64::structures::paging::page_table::PageTableFlags;
-use crate::{dune_flush_tlb, dune_flush_tlb_one, globals::*, DuneProcmapEntry, ProcMapType, DUNE_VM};
+use lazy_static::lazy_static;
+use crate::{dune_flush_tlb, dune_flush_tlb_one, globals::*, DuneProcmapEntry, ProcMapType};
 use crate::mm::*;
 use dune_sys::result::{Result, Error};
 
@@ -642,4 +644,14 @@ impl DuneVm {
             });
         }
     }
+}
+
+lazy_static! {
+    pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
+}
+
+pub fn dune_vm_init() -> Result<()> {
+    dune_page_init()?;
+    lazy_static::initialize(&DUNE_VM);
+    Ok(())
 }

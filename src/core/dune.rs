@@ -9,9 +9,9 @@ use x86_64::VirtAddr;
 use dune_sys::{funcs, funcs_vec, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, TSS_IOPB};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
-use crate::{dune_page_init, get_fs_base, DuneSyscall, PGSIZE};
+use crate::{dune_vm_init, get_fs_base, DuneSyscall, DUNE_VM, PGSIZE};
 
-use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, DUNE_VM, GDT_TEMPLATE, IDT_ENTRIES, LPERCPU};
+use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, GDT_TEMPLATE, IDT_ENTRIES, LPERCPU};
 use super::DuneSignal;
 
 pub struct DunePercpu {
@@ -205,12 +205,11 @@ impl DuneRoutine for DuneSystem {
     fn dune_init(&mut self, map_full: bool) -> Result<()> {
         self.open("/dev/dune")?;
         // Initialize the Dune VM
-        lazy_static::initialize(&DUNE_VM);
+        dune_vm_init()?;
 
         let mut dune_vm = DUNE_VM.lock().unwrap();
         dune_vm.set_layout(self.get_layout()?);
 
-        dune_page_init()?;
         self.setup_mappings(map_full)?;
         self.setup_syscall()?;
 
