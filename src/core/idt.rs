@@ -1,3 +1,4 @@
+use pretty_hex::*;
 use dune_sys::{WithInterrupt, IdtDescriptor};
 
 use crate::globals::*;
@@ -33,6 +34,7 @@ pub fn __setup_idt(idt: &mut [IdtDescriptor]) {
 
 pub trait DuneInterrupt: WithInterrupt {
     fn setup_idt(&mut self) {
+        log::info!("Setting up IDT");
         __setup_idt(self.get_idt_mut());
     }
 }

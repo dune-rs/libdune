@@ -1,5 +1,6 @@
 
 use std::arch::x86_64::{_fxsave, _fxrstor, _xsave, _xrstor, _xsaveopt};
+use xsave::XSave;
 
 use crate::Percpu;
 
@@ -59,16 +60,15 @@ impl FxSaveArea {
 }
 
 #[repr(C, align(64))]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct XSaveArea {
-    pub header: [u8; 512],
-    pub ymm_space: [u8; 256],
+    xsave: XSave,
 }
 
 impl XSaveArea {
     pub fn new() -> Self {
         XSaveArea {
-            header: [0; 512],
-            ymm_space: [0; 256],
+            xsave: XSave::default(),
         }
     }
 
@@ -146,16 +146,14 @@ pub trait WithVmplFpu : Percpu {
 
     fn xsave_begin(&self) {
         let xs = self.get_xsaves_area();
-        unsafe {
-            _xsave(xs as *mut _ as *mut u8, 0x3);
-        }
+        let xsave = &mut (unsafe { *xs }).xsave;
+        xsave.save();
     }
 
     fn xsave_end(&self) {
         let xs = self.get_xsaves_area();
-        unsafe {
-            _xrstor(xs as *const _ as *const u8, 0x3);
-        }
+        let xsave = &(unsafe { *xs }).xsave;
+        xsave.load();
     }
 
     fn get_xsaves_area(&self) -> *mut XSaveArea;

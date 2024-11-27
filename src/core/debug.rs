@@ -1,4 +1,4 @@
-use std::{any::Any, mem, os::raw::c_void, ptr};
+use std::{any::Any, mem, os::raw::c_void};
 use dune_sys::*;
 
 use crate::globals::*;
@@ -50,11 +50,19 @@ pub trait DuneDebug: Device + WithInterrupt + Any {
                 .set_regs_size(mem::size_of::<DuneTrapRegs>() as u64)
                 .set_priv_data(priv_data);
 
-        self.ioctl(DUNE_TRAP_ENABLE, trap_conf)
+        // self.ioctl(DUNE_TRAP_ENABLE, trap_conf)
+        match unsafe { dune_trap_enable(self.fd(), trap_conf) } {
+            Ok(_) => Ok(0),
+            Err(e) => Err(Error::LibcError(e)),
+        }
     }
 
     fn trap_disable(&self) -> Result<i32> {
-        self.ioctl(DUNE_TRAP_DISABLE, ptr::null_mut::<c_void>())
+        // self.ioctl(DUNE_TRAP_DISABLE, ptr::null_mut::<c_void>())
+        match unsafe { dune_trap_disable(self.fd()) } {
+            Ok(_) => Ok(0),
+            Err(e) => Err(Error::LibcError(e)),
+        }
     }
 
     fn handle_int(&mut self, conf: *mut DuneConfig) {

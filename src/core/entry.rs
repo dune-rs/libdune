@@ -2,6 +2,7 @@ use std::ffi::{c_int, c_void};
 use std::sync::Mutex;
 use std::cell::RefCell;
 use lazy_static::lazy_static;
+use libc::EXIT_SUCCESS;
 use nix::errno::Errno;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, *};
@@ -154,8 +155,11 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
 pub extern "C" fn dune_enter() -> c_int {
     let mut device = DEVICE.lock().unwrap();
     match device.as_mut().unwrap().dune_enter() {
-        Ok(_) => 0,
-        Err(_) => -1,
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            log::error!("dune_enter() {}", e);
+            libc::EXIT_FAILURE
+        },
     }
 }
 

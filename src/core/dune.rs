@@ -3,6 +3,7 @@ use std::arch::asm;
 use std::ffi::{c_int, c_void};
 use std::mem::{self, offset_of};
 use std::sync::Arc;
+use std::fmt;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
 
@@ -84,7 +85,7 @@ impl Device for DunePercpu {
         self.vcpu_fd.close()
     }
 
-    fn ioctl<T>(&self, request: u64, arg: *mut T) -> Result<i32> {
+    fn ioctl<T>(&self, request: i32, arg: *mut T) -> Result<i32> {
         self.vcpu_fd.ioctl(request, arg)
     }
 }
@@ -172,14 +173,17 @@ pub fn dune_set_user_fs(fs_base: u64) {
 #[derive(Debug, Copy, Clone)]
 pub struct DuneSystem {
     system: BaseSystem,
+    dune_fd: i32,
 }
 
 impl DuneSystem {
     funcs!(system, BaseSystem);
+    funcs!(dune_fd, i32);
 
     pub fn new() -> Self {
         DuneSystem {
             system: BaseSystem::new(),
+            dune_fd: -1,
         }
     }
 }
@@ -187,7 +191,7 @@ impl DuneSystem {
 impl Device for DuneSystem {
 
     fn fd(&self) -> c_int {
-        self.system.fd()
+        self.dune_fd()
     }
 
     fn open(&mut self, path: &str) -> Result<i32> {
@@ -198,7 +202,7 @@ impl Device for DuneSystem {
         self.system.close()
     }
 
-    fn ioctl<T>(&self, request: u64, arg: *mut T) -> Result<i32> {
+    fn ioctl<T>(&self, request: i32, arg: *mut T) -> Result<i32> {
         self.system.ioctl(request, arg)
     }
 }
@@ -225,7 +229,7 @@ impl DuneRoutine for DuneSystem {
     }
 
     fn dune_init(&mut self, map_full: bool) -> Result<()> {
-        self.open("/dev/dune")?;
+        self.open("/dev/dune\0")?;
         // Initialize the Dune VM
         dune_vm_init()?;
 

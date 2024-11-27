@@ -7,7 +7,7 @@ use x86_64::VirtAddr;
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
-use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, WithVmplFpu, XSaveArea, PGSIZE};
+use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmplFpu, XSaveArea, PGSIZE};
 use crate::__dune_go_dune;
 use crate::{__dune_ret, __dune_enter};
 use core::arch::asm;
@@ -23,6 +23,7 @@ pub struct VmplPercpu {
     pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
     vcpu_fd: BaseDevice,
+    xsave_area: XSaveArea,
     system: Arc<VmplSystem>,
 }
 
@@ -145,6 +146,7 @@ impl VmplPercpu {
     }
 
     fn vmpl_init_pre(&mut self) -> Result<()> {
+        log::info!("vmpl_init_pre");
         // Setup CPU set for the thread
         self.setup_cpuset()?;
 
@@ -197,7 +199,7 @@ impl VmplPercpu {
         config.set_rsp(0);
         config.set_rflags(0x202);
 
-        let vcpu_fd = 0;
+        let vcpu_fd = self.vcpu_fd.fd();
         let rc = unsafe { __dune_enter(vcpu_fd, &mut *config) };
         if rc != 0 {
             log::error!("dune: entry to Dune mode failed");
@@ -239,7 +241,7 @@ impl Device for VmplPercpu {
         self.vcpu_fd.close()
     }
 
-    fn ioctl<T>(&self, request: u64, arg: *mut T) -> Result<i32> {
+    fn ioctl<T>(&self, request: i32, arg: *mut T) -> Result<i32> {
         self.vcpu_fd.ioctl(request, arg)
     }
 }
@@ -302,9 +304,10 @@ impl Percpu for VmplPercpu {
 
     fn idtr(&mut self) -> Tptr {
         // Implement the idtr function
+        log::info!("idtr");
         let idt = self.system().get_idt();
         let mut idtr = Tptr::default();
-        idtr.set_base(idt.as_ptr() as u64)
+        idtr.set_base(idt.as_ptr().addr() as u64)
             .set_limit((idt.len() * mem::size_of::<IdtDescriptor>() - 1) as u16);
         idtr
     }
@@ -323,6 +326,7 @@ impl Percpu for VmplPercpu {
     }
 
     fn setup_gdt(&mut self) {
+        log::info!("setup gdt");
         let gdt = &mut self.gdt;
         let tss = &self.tss;
         gdt.copy_from_slice(&GDT_TEMPLATE);
@@ -335,20 +339,23 @@ impl Percpu for VmplPercpu {
 #[derive(Debug, Copy, Clone)]
 pub struct VmplSystem {
     system: BaseSystem,
+    dune_fd: i32,
 }
 
 impl VmplSystem {
     funcs!(system, BaseSystem);
+    funcs!(dune_fd, i32);
 
     #[allow(dead_code)]
     pub fn new() -> Self {
         VmplSystem {
             system: BaseSystem::new(),
+            dune_fd: -1,
         }
     }
 
     fn setup_vm(&mut self) -> Result<i32> {
-        self.open("/dev/vmpl")?;
+        self.open("/dev/vmpl\0")?;
 
         let vmpl_fd = self.fd();
         let dune_fd = unsafe { vmpl_create_vm(vmpl_fd).map_err(|e| {
@@ -357,13 +364,14 @@ impl VmplSystem {
         }) }?;
 
         unsafe { libc::close(vmpl_fd) };
+        self.set_dune_fd(dune_fd);
         Ok(dune_fd)
     }
 
     fn create_vcpu(&mut self, data: &mut VcpuConfig) -> Result<i32> {
-        let dune_fd = self.fd();
+        let dune_fd = self.dune_fd();
+        log::debug!("dune_fd={}\n", dune_fd);
         unsafe { vmpl_create_vcpu(dune_fd, data as *mut VcpuConfig).map_err(|e| {
-            log::error!("dune: failed to create vcpu");
             Error::LibcError(e)
         }) }
     }
@@ -426,7 +434,7 @@ impl Device for VmplSystem {
         self.system.close()
     }
 
-    fn ioctl<T>(&self, request: u64, arg: *mut T) -> Result<i32> {
+    fn ioctl<T>(&self, request: i32, arg: *mut T) -> Result<i32> {
         self.system.ioctl(request, arg)
     }
 }
@@ -460,19 +468,19 @@ impl DuneRoutine for VmplSystem {
         log::info!("vmpl_init");
 
         // Setup VMPL without error checking
+        #[cfg(feature = "signal")]
         self.setup_signals()?;
         #[cfg(feature = "hotcalls")]
         self.setup_hotcalls();
-        #[cfg(feature = "pgtable")]
-        self.setup_idt()?;
+        self.setup_idt();
 
         self.setup_vm()?;
         #[cfg(feature = "pgtable")]
         self.setup_mm()?;
         #[cfg(feature = "seimi")]
         self.setup_seimi()?;
-        #[cfg(feature = "pgtable")]
-        self.setup_syscall(map_full)?;
+        #[cfg(feature = "seimi")]
+        self.setup_syscall()?;
         #[cfg(feature = "pgtable")]
         self.apic_setup()?;
 
@@ -487,6 +495,7 @@ impl DuneRoutine for VmplSystem {
 
         let percpu: *mut VmplPercpu = VmplPercpu::create()?;
         let percpu = unsafe { &mut *percpu };
+        percpu.set_vcpu_fd(*BaseDevice::new().set_fd(vcpu_fd));
         percpu.do_dune_enter()?;
 
         self.vmpl_init_test();
@@ -538,6 +547,6 @@ impl WithCpuset for VmplPercpu { }
 impl WithVmplFpu for VmplPercpu {
 
     fn get_xsaves_area(&self) -> *mut XSaveArea {
-        todo!()
+        &self.xsave_area as *const _ as *mut XSaveArea
     }
 }

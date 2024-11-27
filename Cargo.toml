@@ -18,6 +18,12 @@ mm = []
 hotcalls = []
 seimi = []
 
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[build]
+target = "x86_64-unknown-linux-musl"
+
 [build-dependencies]
 cc = "1.0"
 
@@ -35,3 +41,6 @@ bit_field = "0.10.2"
 bitflags = "2.6.0"
 rand = "0.8.5"
 nix = "0.29.0"
+x86 = "0.52.0"
+xsave = "2.0.2"
+pretty-hex = "0.4.1"

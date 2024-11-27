@@ -5,6 +5,7 @@ use libc::{sigaction, SIG_IGN, SIGTSTP, SIGSTOP, SIGKILL, SIGCHLD, SIGINT, SIGTE
 
 pub trait DuneSignal : Device {
     fn setup_signals(&self) -> io::Result<()> {
+        log::info!("Setting up signals");
         for i in 1..32 {
             match i {
                 SIGTSTP | SIGSTOP | SIGKILL | SIGCHLD | SIGINT | SIGTERM => continue,
