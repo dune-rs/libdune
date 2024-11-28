@@ -1,6 +1,34 @@
 use std::{arch::asm, u64};
 use x86_64::VirtAddr;
 
+#[macro_export]
+macro_rules! BIT {
+    ($x: expr) => {
+        1 << ($x)
+    };
+}
+
+#[macro_export]
+macro_rules! LOWER_8BITS {
+    ($x: expr) => {
+        ($x & 0xff)
+    };
+}
+
+#[macro_export]
+macro_rules! LOWER_16BITS {
+    ($x: expr) => {
+        ($x & 0xffff)
+    };
+}
+
+#[macro_export]
+macro_rules! LOWER_32BITS {
+    ($x: expr) => {
+        ($x & 0xffffffff)
+    };
+}
+
 pub const NPTBITS: i32 = 9; // log2(NPageTableEntryRIES)
 pub const NPTLVLS: usize = 3; // page table depth -1
 pub const PD_SKIP: usize = 6; // Offset of pd_lim in Pseudodesc
@@ -414,7 +442,7 @@ pub const GPA_MAP_SIZE: usize = 0x1000;
 pub const MSR_KERNEL_GS_BASE: u32 = 0xc0000102;
 pub const MSR_LSTAR: u32 = 0xc0000082; // long mode SYSCALL target
 
-pub fn wrmsrl(msr: u32, value: u64) {
+pub fn wrmsrl(msr: u64, value: u64) {
     unsafe {
         asm!(
             "wrmsr",
@@ -426,7 +454,7 @@ pub fn wrmsrl(msr: u32, value: u64) {
     }
 }
 
-pub fn rdmsrl(msr: u32) -> u64 {
+pub fn rdmsrl(msr: u64) -> u64 {
     let low: u32;
     let high: u32;
     unsafe {

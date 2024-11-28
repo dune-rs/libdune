@@ -3,6 +3,7 @@ use std::mem::{self};
 use std::sync::Arc;
 use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use x86_64::VirtAddr;
+use x86_64::PhysAddr;
 
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
@@ -12,6 +13,9 @@ use crate::__dune_go_dune;
 use crate::{__dune_ret, __dune_enter};
 use core::arch::asm;
 use crate::core::cpuset::WithCpuset;
+use crate::mm::WithPageTable;
+use crate::vc::WithVC;
+use crate::vc::WithGHCB;
 use super::{DuneRoutine, Percpu, GDT_TEMPLATE, IDT_ENTRIES};
 
 pub struct VmplPercpu {
@@ -178,7 +182,7 @@ impl VmplPercpu {
 
         // Setup VC communication
         #[cfg(feature = "vc")]
-        percpu.vc_init()?;
+        self.vc_init()?;
 
         // Setup hotcall
         #[cfg(feature = "hotcalls")]
@@ -475,13 +479,13 @@ impl DuneRoutine for VmplSystem {
         self.setup_idt();
 
         self.setup_vm()?;
-        #[cfg(feature = "pgtable")]
+        #[cfg(feature = "mm")]
         self.setup_mm()?;
         #[cfg(feature = "seimi")]
         self.setup_seimi()?;
-        #[cfg(feature = "seimi")]
+        #[cfg(feature = "syscall")]
         self.setup_syscall()?;
-        #[cfg(feature = "pgtable")]
+        #[cfg(feature = "apic")]
         self.apic_setup()?;
 
         Ok(())
@@ -539,6 +543,8 @@ impl DuneInterrupt for VmplSystem { }
 
 impl DuneSignal for VmplSystem { }
 
+impl DuneSyscall for VmplSystem { }
+
 #[cfg(feature = "debug")]
 impl DuneDebug for VmplSystem { }
 
@@ -550,3 +556,30 @@ impl WithVmplFpu for VmplPercpu {
         &self.xsave_area as *const _ as *mut XSaveArea
     }
 }
+
+impl WithPageTable for VmplPercpu {
+
+    fn pgtable_pa_to_va(&self, pa: PhysAddr) -> VirtAddr {
+        // request parent to lookup pgtable
+        todo!()
+    }
+
+    fn pgtable_va_to_pa(&self, va: VirtAddr) -> PhysAddr {
+        // request parent to lookup pgtable
+        todo!()
+    }
+}
+
+impl WithGHCB for VmplPercpu {
+
+    fn ghcb(&self) -> VirtAddr {
+        VirtAddr::new(0)
+    }
+
+    fn set_ghcb(&mut self, ghcb_va: VirtAddr) {
+        todo!();
+    }
+
+}
+
+impl WithVC for VmplPercpu { }

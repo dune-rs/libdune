@@ -1,12 +1,17 @@
+#![feature(abi_x86_interrupt)]
 #![feature(thread_local)]
 #![feature(ptr_mask)]
 #![feature(c_variadic)]
 #![allow(unused_macros)]
 #![allow(unused_variables)]
+#![allow(unused)]
 #[macro_use]
 pub mod globals;
 pub mod core;
 pub mod mm;
+#[cfg(feature = "vc")]
+#[macro_use]
+pub mod vc;
 pub mod fpu;
 #[cfg(feature = "syscall")]
 pub mod syscall;
