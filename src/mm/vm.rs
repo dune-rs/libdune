@@ -431,10 +431,15 @@ impl DuneVm {
         }
 
         let mut pte_flags = get_pte_flags(perm);
+        let __mprotect_helper = |flags: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr| -> Result<()> {
+            let flags = unsafe { *flags };
+            pte.set_flags(flags | (pte.flags() & PageTableFlags::HUGE_PAGE));
+            Ok(())
+        };
 
         DuneVm::__page_walk(
             root, start_va, start_va + len - 1,
-            DuneVm::__mprotect_helper,
+            __mprotect_helper,
             &mut pte_flags,
             PageTableLevel::Four,
             CreateType::None,
@@ -442,12 +447,6 @@ impl DuneVm {
             dune_flush_tlb();
             Ok(())
         })
-    }
-
-    fn __mprotect_helper(flags: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr) -> Result<()> {
-        let flags = unsafe { *flags };
-        pte.set_flags(flags | (pte.flags() & PageTableFlags::HUGE_PAGE));
-        Ok(())
     }
 
     pub fn map_phys(
@@ -471,20 +470,20 @@ impl DuneVm {
             CreateType::Normal
         };
 
+        let __map_phys_helper = |data: *mut MapPhysData, pte: &mut PageTableEntry, va: VirtAddr| -> Result<()> {
+            let data = unsafe { &mut *data };
+            let addr = PhysAddr::new(va - data.va_base + data.pa_base.as_u64());
+            pte.set_addr(addr, data.perm);
+            Ok(())
+        };
+
         DuneVm::__page_walk(
             &mut self.root, va, (va) + len - 1,
-            DuneVm::__map_phys_helper,
+            __map_phys_helper,
             &mut data,
             PageTableLevel::Four,
             create,
         )
-    }
-
-    fn __map_phys_helper(data: *mut MapPhysData, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()> {
-        let data = unsafe { &mut *data };
-        let addr = PhysAddr::new(va - data.va_base + data.pa_base.as_u64());
-        pte.set_addr(addr, data.perm);
-        Ok(())
     }
 
     pub fn map_page(
@@ -514,36 +513,47 @@ impl DuneVm {
 
         let mut pte_flags = get_pte_flags(perm);
 
+        let __map_pages_helper = |arg: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr| -> Result<()> {
+            let page = alloc_page();
+            page.and_then(|addr|{
+                let dst = addr.as_u64() as u64 as *mut PageTable;
+                unsafe {
+                    ptr::write_bytes(dst as *mut u8, 0, PGSIZE as usize);
+                    let flags = *(arg as *const PageTableFlags);
+                    pte.set_addr(addr, flags);
+                }
+                Some(())
+            }).ok_or(Error::Unknown)
+        };
+
         DuneVm::__page_walk(
             &mut self.root, start_va, start_va + len - 1,
-            DuneVm::__map_pages_helper,
+            __map_pages_helper,
             &mut pte_flags,
             PageTableLevel::Four,
             CreateType::Normal,
         )
     }
 
-    fn __map_pages_helper(arg: *mut PageTableFlags , pte: &mut PageTableEntry, _va: VirtAddr) -> Result<()> {
-        let page = alloc_page();
-        page.and_then(|addr|{
-            let dst = addr.as_u64() as u64 as *mut PageTable;
-            unsafe {
-                ptr::write_bytes(dst as *mut u8, 0, PGSIZE as usize);
-                let flags = *(arg as *const PageTableFlags);
-                pte.set_addr(addr, flags);
-            }
-            Some(())
-        }).ok_or(Error::Unknown)
-    }
-
     pub fn clone(root: *mut PageTable) -> Result<*mut PageTable> {
         let pa = alloc_page();
+        let __clone_helper = |arg: *mut PageTable, pte: &mut PageTableEntry, va: VirtAddr| -> Result<()> {
+            let new_root = unsafe { &mut *(arg as *mut PageTable) };
+            let ret = DuneVm::lookup(new_root, va, CreateType::Normal);
+            ret.and_then(|new_pte|{
+                if dune_page_isfrompool(pte.addr()) {
+                    dune_page_get(dune_pa2page(pte.addr()));
+                }
+                new_pte.set_addr(pte.addr(), pte.flags());
+                Ok(())
+            })
+        };
         pa.and_then(|pa|{
             let new_root = pa.as_u64() as *mut PageTable;
             unsafe { ptr::write_bytes(new_root, 0, PGSIZE as usize) };
             DuneVm::__page_walk(
                 root, VA_START, VA_END,
-                DuneVm::__clone_helper,
+                __clone_helper,
                 new_root ,
                 PageTableLevel::Four,
                 CreateType::None,
@@ -553,19 +563,6 @@ impl DuneVm {
                 Ok(new_root)
             }).ok()
         }).ok_or(Error::Unknown)
-    }
-
-    fn __clone_helper(arg: *mut PageTable, pte: &mut PageTableEntry, va: VirtAddr) -> Result<()> {
-        let new_root = unsafe { &mut *(arg as *mut PageTable) };
-        let ret = DuneVm::lookup(new_root, va, CreateType::Normal);
-        ret.and_then(|a|{
-            let new_pte = a;
-            if dune_page_isfrompool(pte.addr()) {
-                dune_page_get(dune_pa2page(pte.addr()));
-            }
-            new_pte.set_addr(pte.addr(), pte.flags());
-            Ok(())
-        })
     }
 
     pub fn free(root: *mut PageTable) -> Result<()>{
