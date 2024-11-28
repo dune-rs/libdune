@@ -22,6 +22,8 @@ pub static GDT_TEMPLATE: [u64; NR_GDT_ENTRIES] = [
     0,
 ];
 
+const SAFE_STACK_SIZE: usize = PGSIZE;
+
 pub trait Percpu {
 
     type SelfType: Percpu;
@@ -62,15 +64,21 @@ pub trait Percpu {
 
     fn prepare(&mut self) -> Result<()>;
 
-    fn map_safe_stack<T>(&mut self) -> Result<*mut T> {
-        let safe_stack: *mut c_void = unsafe { mmap(ptr::null_mut(), PGSIZE, PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) };
+    fn map_safe_stack() -> Result<*mut c_void> {
+        let safe_stack: *mut c_void = unsafe {mmap(
+            std::ptr::null_mut(),
+            SAFE_STACK_SIZE,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )};
         if safe_stack == MAP_FAILED {
             return Err(Error::LibcError(Errno::last()));
         }
 
-        let safe_stack = unsafe { safe_stack.add(PGSIZE) };
-        Ok(safe_stack as *mut T)
+        let safe_stack = unsafe { safe_stack.add(SAFE_STACK_SIZE) };
+        Ok(safe_stack as *mut c_void)
     }
 
     fn setup_safe_stack(&mut self) -> Result<()>;

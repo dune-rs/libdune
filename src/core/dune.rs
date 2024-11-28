@@ -131,8 +131,7 @@ impl Percpu for DunePercpu {
     }
 
     fn setup_safe_stack(&mut self) -> Result<()> {
-        let safe_stack: *mut c_void = self.map_safe_stack()?;
-        let safe_stack = unsafe { safe_stack.add(PGSIZE) };
+        let safe_stack: *mut c_void = Self::map_safe_stack()?;
         self.tss.set_tss_iomb(TSS_IOPB as u16);
 
         for idx in 1..8 {

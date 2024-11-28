@@ -229,8 +229,6 @@ impl VmplPercpu {
 
 }
 
-const SAFE_STACK_SIZE: usize = 0x1000;
-
 impl Device for VmplPercpu {
 
     fn fd(&self) -> c_int {
@@ -266,23 +264,7 @@ impl Percpu for VmplPercpu {
 
         log::info!("setup safe stack");
 
-        let safe_stack = unsafe {
-            mmap(
-                std::ptr::null_mut(),
-                SAFE_STACK_SIZE,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-
-        if safe_stack == libc::MAP_FAILED {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "failed to map safe stack").into());
-        }
-
-        let safe_stack = unsafe { safe_stack.add(SAFE_STACK_SIZE) };
-        // self.tss.tss_iomb = std::mem::size_of::<Tss>() as u16;
+        let safe_stack = Self::map_safe_stack()?;
         self.tss.set_tss_iomb(std::mem::size_of::<Tss>() as u16);
 
         for i in 0..7 {
