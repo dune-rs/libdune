@@ -24,37 +24,26 @@ fn setup_vsyscall() -> Result<()> {
     Ok(())
 }
 
-fn __setup_mappings_cb(ent: &DuneProcmapEntry) -> Result<()> {
-    // page region already mapped
-    if ent.begin() == VirtAddr::new(PAGEBASE.as_u64()) {
-        return Ok(());
-    }
-
-    if ent.begin() == VSYSCALL_ADDR {
-        setup_vsyscall()?;
-        return Ok(());
-    }
-
-    MmapArgs::from(ent).map()
-}
-
 fn __setup_mappings_precise() -> Result<()> {
     MmapArgs::default()
             .set_va(VirtAddr::new(PAGEBASE.as_u64()))
             .set_len((MAX_PAGES * PGSIZE) as u64)
             .set_perm(PERM_R | PERM_W | PERM_BIG)
-            .map()
-            .and_then(|()| {
-                dune_procmap_iterate(__setup_mappings_cb)
-            })
-}
+            .map()?;
 
-fn setup_vdso_cb(ent: &DuneProcmapEntry) -> Result<()> {
-    match ent.type_() {
-        ProcMapType::Vdso
-        | ProcMapType::Vvar => MmapArgs::from(ent).map(),
-        _ => Ok(()),
-    }
+    dune_procmap_iterate(|ent|{
+        // page region already mapped
+        if ent.begin() == VirtAddr::new(PAGEBASE.as_u64()) {
+            return Ok(());
+        }
+
+        if ent.begin() == VSYSCALL_ADDR {
+            setup_vsyscall()?;
+            return Ok(());
+        }
+
+        MmapArgs::from(ent).map()
+    })
 }
 
 fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
@@ -79,7 +68,13 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
             .set_perm(PERM_R | PERM_W | PERM_BIG)
             .map()?;
 
-    dune_procmap_iterate(setup_vdso_cb)?;
+    dune_procmap_iterate(| ent |{
+        match ent.type_() {
+            ProcMapType::Vdso
+            | ProcMapType::Vvar => MmapArgs::from(ent).map(),
+            _ => Ok(()),
+        }
+    })?;
     setup_vsyscall()?;
 
     Ok(())
@@ -96,17 +91,15 @@ pub fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
             .map()
 }
 
-fn map_stack_cb(e: &DuneProcmapEntry) -> Result<()> {
-    let esp: u64 = rd_rsp();
-    let addr = VirtAddr::new(esp);
-    if addr >= e.begin() && addr < e.end() {
-        let _ = map_ptr(e.begin(), e.len() as usize);
-    }
-    Ok(())
-}
-
 pub fn map_stack() -> Result<()> {
-    dune_procmap_iterate(map_stack_cb)
+    dune_procmap_iterate(|e|{
+        let esp: u64 = rd_rsp();
+        let addr = VirtAddr::new(esp);
+        if addr >= e.begin() && addr < e.end() {
+            let _ = map_ptr(e.begin(), e.len() as usize);
+        }
+        Ok(())
+    })
 }
 
 pub trait DuneMapping : Device {
