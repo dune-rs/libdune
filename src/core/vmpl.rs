@@ -21,6 +21,7 @@ use crate::vc::{Ghcb, GHCB_MMAP_BASE};
 use crate::vc::WithVC;
 use crate::vc::WithGHCB;
 use crate::syscall::WithHotCalls;
+use crate::security::WithSeimi;
 use super::{DuneRoutine, Percpu, GDT_TEMPLATE, IDT_ENTRIES};
 
 pub struct VmplPercpu {
@@ -517,6 +518,8 @@ impl DuneSyscall for VmplSystem { }
 
 #[cfg(feature = "debug")]
 impl DuneDebug for VmplSystem { }
+#[cfg(feature = "seimi")]
+impl WithSeimi for VmplSystem { }
 
 impl WithHotCalls for VmplSystem { }
 
