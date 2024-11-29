@@ -46,7 +46,7 @@ impl VmplPercpu {
     funcs_vec!(gdt, u64);
 
     #[allow(dead_code)]
-    fn vmpl_alloc_percpu() -> Option<*mut VmplPercpu> {
+    pub fn alloc() -> Option<&'static mut VmplPercpu> {
         let percpu = unsafe {
             mmap(
                 std::ptr::null_mut(),
@@ -62,23 +62,24 @@ impl VmplPercpu {
             return None;
         }
 
-        let percpu = percpu as *mut VmplPercpu;
-        unsafe {
-            (*percpu).kfs_base = VirtAddr::new(rdfsbase());
-            (*percpu).ufs_base = VirtAddr::new(rdfsbase());
-            (*percpu).in_usermode = 1;
-        }
+        let percpu_ptr = percpu as *mut VmplPercpu;
+        let percpu = unsafe {&mut *percpu_ptr};
 
-        if let Err(_) = unsafe { (*percpu).setup_safe_stack() } {
+        let fsbase = VirtAddr::new(rdfsbase());
+        percpu.set_kfs_base(fsbase)
+            .set_ufs_base(fsbase)
+            .set_in_usermode(1);
+
+        if let Err(_) = percpu.setup_safe_stack() {
             log::error!("dune: failed to setup safe stack");
-            unsafe { munmap(percpu as *mut c_void, PGSIZE as usize) };
+            Self::free(percpu_ptr);
             return None;
         }
 
         Some(percpu)
     }
 
-    pub fn vmpl_free_percpu(percpu: *mut VmplPercpu) {
+    pub fn free(percpu: *mut VmplPercpu) {
         log::debug!("vmpl_free_percpu");
         unsafe { munmap(percpu as *mut c_void, PGSIZE as usize) };
     }
@@ -95,7 +96,6 @@ impl VmplPercpu {
         let mut data = Box::new(VcpuConfig::default());
         log::info!("setup vmsa");
 
-        data.set_lstar(__dune_syscall as u64);
         let fsbase = *VmsaSeg::new().set_base(self.kfs_base.as_u64());
         let gsbase = *VmsaSeg::new().set_base(self as *const _ as u64);
 
@@ -113,7 +113,8 @@ impl VmplPercpu {
             .set_base(self.system().get_idt().as_ptr() as u64)
             .set_limit((IDT_ENTRIES * std::mem::size_of::<IdtDescriptor>() - 1) as u32);
 
-        data.set_fs(fsbase)
+        data.set_lstar(__dune_syscall as u64)
+            .set_fs(fsbase)
             .set_gs(gsbase)
             .set_tr(tr) // refer to linux-svsm
             .set_gdtr(gdtr)
@@ -232,7 +233,6 @@ impl Percpu for VmplPercpu {
     type SelfType = VmplPercpu;
     type SystemType = VmplSystem;
 
-    // fn init(&self) -> Result<&mut Self::SelfType>;
 
     fn prepare(&mut self) -> Result<()> {
         // Implement the prepare function
@@ -247,7 +247,6 @@ impl Percpu for VmplPercpu {
         self.tss.set_tss_iomb(std::mem::size_of::<Tss>() as u16);
 
         for i in 0..7 {
-            // self.tss.tss_ist[i] = safe_stack as u64;
             self.tss.set_tss_ist(i, safe_stack as u64);
         }
 
