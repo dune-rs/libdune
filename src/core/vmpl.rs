@@ -9,6 +9,7 @@ use dune_sys::vmpl_get_config;
 use dune_sys::vmpl_get_ghcb;
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
+use crate::globals::rdfsbase;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmplFpu, XSaveArea, PGSIZE};
 use crate::__dune_go_dune;
