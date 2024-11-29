@@ -16,6 +16,7 @@ use crate::core::cpuset::WithCpuset;
 use crate::mm::WithPageTable;
 use crate::vc::WithVC;
 use crate::vc::WithGHCB;
+use crate::syscall::WithHotCalls;
 use super::{DuneRoutine, Percpu, GDT_TEMPLATE, IDT_ENTRIES};
 
 pub struct VmplPercpu {
@@ -529,6 +530,8 @@ impl DuneSyscall for VmplSystem { }
 
 #[cfg(feature = "debug")]
 impl DuneDebug for VmplSystem { }
+
+impl WithHotCalls for VmplSystem { }
 
 impl WithCpuset for VmplPercpu { }
 

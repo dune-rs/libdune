@@ -12,6 +12,7 @@ use nix::errno::Errno;
 use dune_sys::DuneTf;
 use dune_sys::Result;
 use dune_sys::Error;
+use crate::DuneRoutine;
 
 // Constants
 const MAX_SYSCALLS: usize = 512; // Replace with actual value of __NR_syscalls
@@ -149,6 +150,13 @@ pub fn setup_hotcalls() {
         println!("Hotcalls enabled with {} registered hotcalls", nr_hotcalls);
     } else {
         println!("Hotcalls not enabled");
+    }
+}
+
+pub trait WithHotCalls : DuneRoutine {
+
+    fn setup_hotcalls() {
+        setup_hotcalls();
     }
 }
 
