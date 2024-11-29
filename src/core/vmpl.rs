@@ -468,8 +468,6 @@ impl DuneRoutine for VmplSystem {
         self.setup_seimi()?;
         #[cfg(feature = "syscall")]
         self.setup_syscall()?;
-        #[cfg(feature = "apic")]
-        self.apic_setup()?;
 
         Ok(())
     }

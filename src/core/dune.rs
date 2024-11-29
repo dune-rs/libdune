@@ -12,6 +12,7 @@ use dune_sys::{funcs, funcs_vec, BaseDevice, BaseSystem, Device, DuneConfig, Dun
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_vm_init, get_fs_base, DuneSyscall, FxSaveArea, WithDuneFpu, DUNE_VM, PGSIZE};
 
+use crate::core::WithDuneAPIC;
 use super::cpuset::WithCpuset;
 use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, GDT_TEMPLATE, IDT_ENTRIES, LPERCPU};
 use super::DuneSignal;
@@ -235,6 +236,8 @@ impl DuneRoutine for DuneSystem {
         let mut dune_vm = DUNE_VM.lock().unwrap();
         dune_vm.set_layout(self.get_layout()?);
 
+        #[cfg(feature = "apic")]
+        self.apic_setup()?;
         self.setup_mappings(map_full)?;
         self.setup_syscall()?;
 
@@ -314,6 +317,8 @@ impl DuneRoutine for DuneSystem {
     }
 }
 
+#[cfg(feature = "apic")]
+impl WithDuneAPIC for DuneSystem { }
 impl DuneInterrupt for DuneSystem { }
 impl DuneSignal for DuneSystem { }
 #[cfg(feature = "debug")]
