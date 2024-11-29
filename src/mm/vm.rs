@@ -346,23 +346,27 @@ impl DuneVm {
         let k = addr.p2_index(); // PD
         let l = addr.p1_index(); // PT
         let p4de = &mut root[i];
+
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+        let mut __alloc_page = || -> Result<PhysAddr> {
+            alloc_page()
+                .map_or(Err(Error::LibcError(Errno::ENOMEM)), |phys_addr|{
+                // VA == PA
+                let addr = phys_addr.as_u64() as *mut PageTable;
+                // clear page
+                unsafe {ptr::write_bytes(addr, 0, PGSIZE as usize)};
+                Ok(phys_addr)
+            })
+        };
+
         let pdpt = if !p4de.flags().contains(PageTableFlags::PRESENT) {
             if create == CreateType::None {
                 return Err(Error::from(libc::ENOENT))
             }
 
-            let pdptep = alloc_page()
-                .map_or(Err(libc::ENOMEM), |addr|{
-                    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-                    p4de.set_addr(addr, flags);
-                    // VA == PA
-                    Ok(addr.as_u64() as *mut PageTable)
-                })?;
-            unsafe {
-                // clear page
-                ptr::write_bytes(pdptep, 0, PGSIZE as usize);
-                &mut *(pdptep)
-            }
+            let phys_addr = __alloc_page()?;
+            p4de.set_addr(phys_addr, flags);
+            unsafe { &mut *(phys_addr.as_u64() as *mut PageTable) }
         } else {
             unsafe { &mut *(p4de.addr().as_u64() as *mut PageTable) }
         };
@@ -373,18 +377,9 @@ impl DuneVm {
                 return Err(Error::LibcError(Errno::ENOENT));
             }
 
-            let pdep = alloc_page()
-                .map_or(Err(libc::ENOMEM), |addr|{
-                    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-                    pdpte.set_addr(addr, flags);
-                    // VA == PA
-                    Ok(addr.as_u64() as *mut PageTable)
-                })?;
-            unsafe {
-                // clear page
-                ptr::write_bytes(pdep, 0, PGSIZE as usize);
-                &mut *pdep
-            }
+            let phys_addr = __alloc_page()?;
+            pdpte.set_addr(phys_addr, flags);
+            unsafe { &mut *(phys_addr.as_u64() as *mut PageTable) }
         } else if pte_big1gb(pdpte) {
             return Ok(pdpte);
         } else {
@@ -399,17 +394,9 @@ impl DuneVm {
                 return Err(Error::LibcError(Errno::ENOENT));
             }
 
-            let ptep = alloc_page()
-                .map_or(Err(libc::ENOMEM), |addr|{
-                    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-                    pde.set_addr(addr, flags);
-                    Ok(addr.as_u64() as *mut PageTable)
-                })?;
-
-            unsafe {
-                ptr::write_bytes(ptep, 0, PGSIZE as usize);
-                &mut *(ptep)
-            }
+            let phys_addr = __alloc_page()?;
+            pde.set_addr(phys_addr, flags);
+            unsafe { &mut *(phys_addr.as_u64() as *mut PageTable) }
         } else if pte_big(&pde) {
             return Ok(pde);
         } else {
