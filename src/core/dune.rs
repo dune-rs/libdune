@@ -7,8 +7,8 @@ use std::fmt;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
 
-use dune_sys::{funcs, funcs_vec, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Tptr, Tss, WithInterrupt, TSS_IOPB};
-
+use dune_sys::{funcs, funcs_vec, BaseDevice, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Error, Tptr, Tss, WithInterrupt, TSS_IOPB};
+use dune_sys::dune_get_layout;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_vm_init, get_fs_base, DuneSyscall, FxSaveArea, WithDuneFpu, DUNE_VM, PGSIZE};
 
@@ -323,7 +323,17 @@ impl DuneInterrupt for DuneSystem { }
 impl DuneSignal for DuneSystem { }
 #[cfg(feature = "debug")]
 impl DuneDebug for DuneSystem { }
-impl DuneMapping for DuneSystem { }
+impl DuneMapping for DuneSystem {
+
+    fn get_layout(&self) -> Result<DuneLayout> {
+        let mut layout = DuneLayout::default();
+        let ret = unsafe { dune_get_layout(self.fd(), &mut layout as *mut DuneLayout) };
+        match ret {
+            Ok(_) => Ok(layout),
+            Err(e) => Err(Error::LibcError(e)),
+        }
+    }
+}
 impl DuneSyscall for DuneSystem { }
 
 impl WithCpuset for DunePercpu { }

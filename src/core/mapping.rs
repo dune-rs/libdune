@@ -102,16 +102,9 @@ pub fn map_stack() -> Result<()> {
     })
 }
 
-pub trait DuneMapping : Device {
+pub trait DuneMapping {
 
-    fn get_layout(&self) -> Result<DuneLayout> {
-        let mut layout = DuneLayout::default();
-        let ret = unsafe { dune_get_layout(self.fd(), &mut layout as *mut DuneLayout) };
-        match ret {
-            Ok(_) => Ok(layout),
-            Err(e) => Err(Error::LibcError(e)),
-        }
-    }
+    fn get_layout(&self) -> Result<DuneLayout>;
 
     fn setup_mappings(&self, full: bool) -> Result<()> {
         let layout = self.get_layout()?;
