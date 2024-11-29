@@ -5,6 +5,7 @@ use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use libc::{MAP_FAILED,MAP_SHARED,MAP_FIXED,MAP_POPULATE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
+use dune_sys::vmpl_get_config;
 use dune_sys::vmpl_get_ghcb;
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
@@ -90,6 +91,16 @@ impl VmplPercpu {
             log::error!("dune: failed to set config");
             Error::LibcError(e)
         }) }
+    }
+
+    fn get_config(&mut self, data: &mut VcpuConfig) -> Result<i32> {
+        let fd = self.vcpu_fd.fd();
+        unsafe {
+            vmpl_get_config(fd, data as *mut VcpuConfig).map_err(|e| {
+                log::error!("dune: failed to get config");
+                Error::LibcError(e)
+            }) 
+        }
     }
 
     fn setup_vmsa(&mut self) -> Result<()> {
