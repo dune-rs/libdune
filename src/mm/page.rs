@@ -50,7 +50,7 @@ unsafe impl Send for PageManager {}
 
 impl PageManager {
 
-    fn new() -> Self {
+    pub fn new() -> Self {
         PageManager {
             pages: ptr::null_mut(),
             free_list: ptr::null_mut(),
@@ -265,6 +265,15 @@ pub fn dune_page_init() -> Result<()> {
 pub fn dune_page_stats() {
     let pm = PAGE_MANAGER.lock().unwrap();
     pm.page_stats()
+}
+
+pub trait WithPageManager {
+
+    // 获取页管理器的引用
+    fn page_manager(&self) -> Arc<Mutex<PageManager>>;
+
+    // 向Guest OS申请num_pages个物理页
+    fn get_pages(&self, num_pages: u64) -> Result<PhysAddr>;
 }
 
 #[test]

@@ -1,12 +1,15 @@
 use std::ffi::{c_int, c_void};
 use std::mem::{self};
 use std::sync::Arc;
+use std::sync::Mutex;
 use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use libc::{MAP_FAILED,MAP_SHARED,MAP_FIXED,MAP_POPULATE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
 use dune_sys::vmpl_get_config;
 use dune_sys::vmpl_get_ghcb;
+use dune_sys::vmpl_get_pages;
+use dune_sys::GetPages;
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
 use crate::globals::rdfsbase;
@@ -15,6 +18,8 @@ use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmp
 use crate::__dune_go_dune;
 use crate::{__dune_ret, __dune_enter};
 use crate::core::cpuset::WithCpuset;
+use crate::mm::PageManager;
+use crate::mm::WithPageManager;
 use crate::mm::WithPageTable;
 use crate::mm::PAGE_SIZE;
 use crate::vc::{Ghcb, GHCB_MMAP_BASE};
@@ -313,9 +318,10 @@ impl Percpu for VmplPercpu {
 
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct VmplSystem {
     system: BaseSystem,
+    page_manager: Arc<Mutex<PageManager>>,
     dune_fd: i32,
 }
 
@@ -327,6 +333,7 @@ impl VmplSystem {
     pub fn new() -> Self {
         VmplSystem {
             system: BaseSystem::new(),
+            page_manager: Arc::new(Mutex::new(PageManager::new())),
             dune_fd: -1,
         }
     }
@@ -518,6 +525,26 @@ impl DuneSyscall for VmplSystem { }
 
 #[cfg(feature = "debug")]
 impl DuneDebug for VmplSystem { }
+
+impl WithPageManager for VmplSystem {
+
+    fn page_manager(&self) -> Arc<Mutex<PageManager>> {
+        Arc::clone(&self.page_manager)
+    }
+
+    fn get_pages(&self, num_pages: u64) -> Result<PhysAddr> {
+        let fd = self.fd();
+        let mut args = GetPages::default();
+        args.set_num_pages(num_pages);
+        unsafe { vmpl_get_pages(fd, &mut args).map_err(|e| {
+            log::error!("dune: failed to get pages");
+            Error::LibcError(e)
+        }) }?;
+        let phys = args.phys();
+        Ok(PhysAddr::new(phys))
+    }
+}
+
 #[cfg(feature = "seimi")]
 impl WithSeimi for VmplSystem { }
 
