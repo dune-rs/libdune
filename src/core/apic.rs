@@ -32,8 +32,9 @@ pub fn dune_apic_setup() -> Result<()> {
     log::info!("setup apic");
     unsafe {
         NUM_RT_ENTRIES = sysconf(_SC_NPROCESSORS_CONF);
-        log::debug!("num rt entries: {}", NUM_RT_ENTRIES);
-        let layout = Layout::array::<i32>(NUM_RT_ENTRIES as usize).unwrap();
+        let num_rt_entries = NUM_RT_ENTRIES; // 将值复制到局部变量
+        log::debug!("num rt entries: {}", num_rt_entries);
+        let layout = Layout::array::<i32>(num_rt_entries as usize).unwrap();
         APIC_ROUTING = alloc(layout) as *mut i32;
 
         if APIC_ROUTING.is_null() {
