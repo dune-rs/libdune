@@ -437,3 +437,27 @@ pub fn rdmsrl(msr: u64) -> u64 {
     }
     ((high as u64) << 32) | (low as u64)
 }
+
+#[allow(dead_code)]
+pub fn rdfsbase() -> u64 {
+    let fsbase: u64;
+    unsafe {
+        asm!(
+            "rdfsbase {fsbase}",
+            fsbase = out(reg) fsbase,
+            options(nostack, preserves_flags)
+        );
+    }
+    fsbase
+}
+
+#[allow(dead_code)]
+pub fn wrfsbase(fsbase: u64) {
+    unsafe {
+        asm!(
+            "wrfsbase {fsbase}",
+            fsbase = in(reg) fsbase,
+            options(nostack, preserves_flags)
+        );
+    }
+}

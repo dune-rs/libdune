@@ -12,7 +12,6 @@ use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmplFpu, XSaveArea, PGSIZE};
 use crate::__dune_go_dune;
 use crate::{__dune_ret, __dune_enter};
-use core::arch::asm;
 use crate::core::cpuset::WithCpuset;
 use crate::mm::WithPageTable;
 use crate::mm::PAGE_SIZE;
@@ -36,30 +35,6 @@ pub struct VmplPercpu {
 }
 
 use crate::__dune_syscall;
-
-#[allow(dead_code)]
-fn rdfsbase() -> u64 {
-    let fsbase: u64;
-    unsafe {
-        asm!(
-            "rdfsbase {fsbase}",
-            fsbase = out(reg) fsbase,
-            options(nostack, preserves_flags)
-        );
-    }
-    fsbase
-}
-
-#[allow(dead_code)]
-fn wrfsbase(fsbase: u64) {
-    unsafe {
-        asm!(
-            "wrfsbase {fsbase}",
-            fsbase = in(reg) fsbase,
-            options(nostack, preserves_flags)
-        );
-    }
-}
 
 impl VmplPercpu {
     funcs!(percpu_ptr, u64);
