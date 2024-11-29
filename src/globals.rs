@@ -365,37 +365,6 @@ pub const ARCH_SET_FS: i32 = 0x1004;
 // pub const SEG_A: u64 = 0x1;
 // pub const SEG_TSSA: u64 = 0x89;
 
-pub const VSYSCALL_ADDR: usize = 0xffffffffff600000;
-
-// pub const CREATE_NONE: i32 = 0;
-// pub const CREATE_NORMAL: i32 = 1;
-// pub const CREATE_BIG: i32 = 2;
-// pub const CREATE_BIG_1GB: i32 = 3;
-
-pub const PERM_NONE: i32 = 0;
-pub const PERM_R: i32 = 0x0001;
-pub const PERM_W: i32 = 0x0002;
-pub const PERM_X: i32 = 0x0004;
-pub const PERM_U: i32 = 0x0008;
-pub const PERM_UC: i32 = 0x0010;
-pub const PERM_COW: i32 = 0x0020;
-pub const PERM_USR1: i32 = 0x1000;
-pub const PERM_USR2: i32 = 0x2000;
-pub const PERM_USR3: i32 = 0x3000;
-pub const PERM_BIG: i32 = 0x0100;
-pub const PERM_BIG_1GB: i32 = 0x0200;
-
-// Helper Macros
-pub const VA_START: VirtAddr = VirtAddr::new(u64::MIN);
-pub const VA_END: VirtAddr = VirtAddr::new(u64::MAX);
-
-pub const PERM_SCODE: i32 = PERM_R | PERM_X;
-pub const PERM_STEXT: i32 = PERM_R | PERM_W;
-pub const PERM_SSTACK: i32 = PERM_STEXT;
-pub const PERM_UCODE: i32 = PERM_R | PERM_U | PERM_X;
-pub const PERM_UTEXT: i32 = PERM_R | PERM_U | PERM_W;
-pub const PERM_USTACK: i32 = PERM_UTEXT;
-
 pub const X86_EFLAGS_CF: u64 = 0x1;
 pub const X86_EFLAGS_PF: u64 = 0x4;
 pub const X86_EFLAGS_AF: u64 = 0x10;

@@ -1,7 +1,7 @@
 use dune_sys::*;
 
 use x86_64::VirtAddr;
-use crate::globals::{PERM_BIG, PERM_R, PERM_U, PERM_W, PERM_X};
+use crate::mm::Permissions;
 use crate::{dune_procmap_iterate, DuneProcmapEntry, ProcMapType, MAX_PAGES, PAGEBASE, PGSIZE};
 use crate::mm::MmapArgs;
 use crate::utils::rd_rsp;
@@ -14,7 +14,7 @@ fn setup_vsyscall() -> Result<()> {
     MmapArgs::default()
             .set_va(VSYSCALL_ADDR)
             .set_len(PGSIZE as u64)
-            .set_perm(PERM_R | PERM_U)
+            .set_perm(Permissions::R | Permissions::U)
             .map()
 }
 
@@ -28,7 +28,7 @@ fn __setup_mappings_precise() -> Result<()> {
     MmapArgs::default()
             .set_va(VirtAddr::new(PAGEBASE.as_u64()))
             .set_len((MAX_PAGES * PGSIZE) as u64)
-            .set_perm(PERM_R | PERM_W | PERM_BIG)
+            .set_perm(Permissions::R | Permissions::W | Permissions::BIG)
             .map()?;
 
     dune_procmap_iterate(|ent|{
@@ -50,22 +50,22 @@ fn __setup_mappings_full(layout: &DuneLayout) -> Result<()> {
     MmapArgs::default()
             .set_va(VirtAddr::new(0))
             .set_len(1 << 32)
-            .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
+            .set_perm(Permissions::R | Permissions::W | Permissions::X | Permissions::U)
             .map()?;
     MmapArgs::default()
             .set_va(layout.base_map())
             .set_len(GPA_MAP_SIZE)
-            .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
+            .set_perm(Permissions::R | Permissions::W | Permissions::X | Permissions::U)
             .map()?;
     MmapArgs::default()
             .set_va(layout.base_stack())
             .set_len(GPA_STACK_SIZE)
-            .set_perm(PERM_R | PERM_W | PERM_X | PERM_U)
+            .set_perm(Permissions::R | Permissions::W | Permissions::X | Permissions::U)
             .map()?;
     MmapArgs::default()
             .set_va(VirtAddr::new(PAGEBASE.as_u64()))
             .set_len((MAX_PAGES * PGSIZE) as u64)
-            .set_perm(PERM_R | PERM_W | PERM_BIG)
+            .set_perm(Permissions::R | Permissions::W | Permissions::BIG)
             .map()?;
 
     dune_procmap_iterate(| ent |{
@@ -87,7 +87,7 @@ pub fn map_ptr(p: VirtAddr, len: usize) -> Result<()> {
     MmapArgs::default()
             .set_va(page)
             .set_len(page_end - page)
-            .set_perm(PERM_R | PERM_W)
+            .set_perm(Permissions::PERM_STEXT)
             .map()
 }
 

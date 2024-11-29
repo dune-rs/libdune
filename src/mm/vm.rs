@@ -8,6 +8,7 @@ use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
 use x86_64::{structures::paging::page_table::PageTableEntry, PhysAddr};
 use x86_64::structures::paging::page_table::PageTableFlags;
+use bitflags::bitflags;
 use lazy_static::lazy_static;
 use crate::{dune_flush_tlb, dune_flush_tlb_one, globals::*, DuneProcmapEntry, ProcMapType};
 use crate::mm::*;
@@ -19,6 +20,12 @@ macro_rules! PDADDR {
         ($i as u64) << PDSHIFT!($n)
     };
 }
+
+// Helper Macros
+pub const VA_START: VirtAddr = VirtAddr::new(u64::MIN);
+pub const VA_END: VirtAddr = VirtAddr::new(u64::MAX);
+
+pub const VSYSCALL_ADDR: usize = 0xffffffffff600000;
 
 #[repr(C)]
 #[derive(Debug,Copy,Clone,PartialEq,Eq)]
@@ -106,34 +113,73 @@ pub fn put_page(page: *mut c_void) {
     dune_page_put(pg);
 }
 
-pub fn get_pte_flags(perms: i32) -> PageTableFlags {
-    let mut flags = PageTableFlags::empty();
-    if perms & PERM_R != 0 {
-        flags |= PageTableFlags::PRESENT;
+bitflags! {
+    #[derive(Default, Debug, Copy, Clone, PartialEq)]
+    pub struct Permissions: i32 {
+        const NONE = 0;
+        const R = 0x0001;
+        const W = 0x0002;
+        const X = 0x0004;
+        const U = 0x0008;
+        const UC = 0x0010;
+        const COW = 0x0020;
+        const USR1 = 0x1000;
+        const USR2 = 0x2000;
+        const USR3 = 0x3000;
+        const BIG = 0x0100;
+        const BIG_1GB = 0x0200;
+        const PERM_SCODE = Self::R.bits() | Self::X.bits();
+        const PERM_STEXT = Self::R.bits() | Self::W.bits();
+        const PERM_SSTACK = Self::PERM_STEXT.bits();
+        const PERM_UCODE = Self::R.bits() | Self::U.bits() | Self::X.bits();
+        const PERM_UTEXT = Self::R.bits() | Self::U.bits() | Self::W.bits();
+        const PERM_USTACK = Self::PERM_UTEXT.bits();
+        const PERM_VVAR = Self::R.bits() | Self::U.bits();
     }
+}
 
-    if perms & PERM_W != 0 {
-        flags |= PageTableFlags::WRITABLE;
+impl From<Permissions> for PageTableFlags {
+    fn from(perms: Permissions) -> Self {
+        let mut flags = PageTableFlags::empty();
+        if perms.contains(Permissions::R) {
+            flags |= PageTableFlags::PRESENT;
+        }
+
+        if perms.contains(Permissions::W) {
+            flags |= PageTableFlags::WRITABLE;
+        }
+
+        if !perms.contains(Permissions::X) {
+            flags |= PageTableFlags::NO_EXECUTE;
+        }
+
+        if perms.contains(Permissions::U) {
+            flags |= PageTableFlags::USER_ACCESSIBLE;
+        }
+
+        // bit 9 is the COW bit
+        if perms.contains(Permissions::COW) {
+            flags |= PageTableFlags::BIT_9;
+        }
+
+        if perms.contains(Permissions::BIG) || perms.contains(Permissions::BIG_1GB) {
+            flags |= PageTableFlags::HUGE_PAGE;
+        }
+
+        flags
     }
+}
 
-    if perms & PERM_X == 0 {
-        flags |= PageTableFlags::NO_EXECUTE;
+impl From<Permissions> for CreateType {
+    fn from(perm: Permissions) -> Self {
+        if perm.contains(Permissions::BIG) {
+            CreateType::Big
+        } else if perm.contains(Permissions::BIG_1GB) {
+            CreateType::Big1GB
+        } else {
+            CreateType::Normal
+        }
     }
-
-    if perms & PERM_U != 0 {
-        flags |= PageTableFlags::USER_ACCESSIBLE;
-    }
-
-    // bit 9 is the COW bit
-    if perms & PERM_COW != 0 {
-        flags |= PageTableFlags::BIT_9;
-    }
-
-    if perms & PERM_BIG != 0 || perms & PERM_BIG_1GB != 0 {
-        flags |= PageTableFlags::HUGE_PAGE;
-    }
-
-    flags
 }
 
 pub trait AddressMapping {
@@ -175,15 +221,15 @@ impl AddressMapping for DuneLayout {
 pub struct MmapArgs {
     va: VirtAddr,
     len: u64,
-    perm: i32,
+    perm: Permissions,
 }
 
 impl MmapArgs {
     funcs!(va, VirtAddr);
     funcs!(len, u64);
-    funcs!(perm, i32);
+    funcs!(perm, Permissions);
 
-    fn new(va: VirtAddr, len: u64, perm: i32) -> Self {
+    fn new(va: VirtAddr, len: u64, perm: Permissions) -> Self {
         Self { va, len, perm }
     }
 
@@ -199,26 +245,26 @@ impl Default for MmapArgs {
         Self {
             va: VirtAddr::new(0),
             len: 0,
-            perm: 0,
+            perm: Permissions::NONE,
         }
     }
 }
 
 impl From<&DuneProcmapEntry> for MmapArgs {
     fn from(ent: &DuneProcmapEntry) -> Self {
-        let mut perm = PERM_NONE;
+        let mut perm = Permissions::NONE;
         perm = match ent.type_() {
-            ProcMapType::Vdso => PERM_U | PERM_R | PERM_X,
-            ProcMapType::Vvar => PERM_U | PERM_R,
+            ProcMapType::Vdso => Permissions::PERM_UCODE,
+            ProcMapType::Vvar => Permissions::PERM_VVAR,
             _ => {
                 if ent.r() {
-                    perm |= PERM_R;
+                    perm |= Permissions::R;
                 }
                 if ent.w() {
-                    perm |= PERM_W;
+                    perm |= Permissions::W;
                 }
                 if ent.x() {
-                    perm |= PERM_X;
+                    perm |= Permissions::X;
                 }
                 perm
             },
@@ -411,13 +457,13 @@ impl DuneVm {
         root: &mut PageTable,
         start_va: VirtAddr,
         len: u64,
-        perm: i32,
+        perm: Permissions,
     ) -> Result<()> {
-        if perm & PERM_R == 0 && perm & PERM_W != 0 {
+        if !perm.contains(Permissions::R) && perm.contains(Permissions::W) {
             return Err(Error::Unknown);
         }
 
-        let mut pte_flags = get_pte_flags(perm);
+        let mut pte_flags = perm.into();
         let __mprotect_helper = |flags: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr| -> Result<()> {
             let flags = unsafe { *flags };
             pte.set_flags(flags | (pte.flags() & PageTableFlags::HUGE_PAGE));
@@ -441,21 +487,14 @@ impl DuneVm {
         va: VirtAddr,
         len: u64,
         pa: PhysAddr,
-        perm: i32,
+        perm: Permissions,
     ) -> Result<()> {
         let mut data = MapPhysData::default();
-        data.set_perm(get_pte_flags(perm))
+        data.set_perm(perm.into())
             .set_va_base(va)
             .set_pa_base(pa);
 
-        let create = 
-        if perm & PERM_BIG != 0 {
-            CreateType::Big
-        } else if perm & PERM_BIG_1GB != 0 {
-            CreateType::Big1GB
-        } else {
-            CreateType::Normal
-        };
+        let create = perm.into();
 
         let __map_phys_helper = |data: *mut MapPhysData, pte: &mut PageTableEntry, va: VirtAddr| -> Result<()> {
             let data = unsafe { &mut *data };
@@ -492,13 +531,14 @@ impl DuneVm {
         // root: *mut PageTable,
         start_va: VirtAddr,
         len: u64,
-        perm: i32,
+        perm: Permissions,
     ) -> Result<()> {
-        if perm & PERM_R == 0 && perm & !PERM_R != 0 {
+
+        if !perm.contains(Permissions::R) && perm.bits() & !Permissions::R.bits() != 0 {
             return Err(Error::Unknown);
         }
 
-        let mut pte_flags = get_pte_flags(perm);
+        let mut pte_flags = perm.into();
 
         let __map_pages_helper = |arg: *mut PageTableFlags, pte: &mut PageTableEntry, _va: VirtAddr| -> Result<()> {
             let page = alloc_page();

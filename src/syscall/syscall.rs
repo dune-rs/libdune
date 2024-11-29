@@ -12,7 +12,7 @@ use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
 
 use crate::PGSIZE;
-use crate::globals::PERM_R;
+use crate::mm::Permissions;
 use crate::core::{*};
 use crate::mm::MmapArgs;
 use dune_sys::result::{Error, Result};
@@ -57,7 +57,7 @@ pub trait DuneSyscall : Device {
         MmapArgs::default()
                 .set_va(lstara)
                 .set_len((PGSIZE * 2) as u64)
-                .set_perm(PERM_R)
+                .set_perm(Permissions::R)
                 .map()
     }
 }
