@@ -896,7 +896,7 @@ fn vc_early_make_pages_private(begin: PhysAddr, end: PhysAddr) {
     perform_page_state_change(ghcb, begin, end, PSC_PRIVATE);
 }
 
-pub trait WithVC : WithGHCB + WithPageTable {
+pub trait WithVC : WithGHCB {
 
     fn vc_init(&mut self) -> Result<i32> {
         let ghcb_va = self.map_ghcb().ok_or(Error::LibcError(Errno::ENOMEM))?;

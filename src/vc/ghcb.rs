@@ -147,35 +147,19 @@ impl Ghcb {
     }
 }
 
-pub trait WithGHCB : Device + Percpu {
+pub trait WithGHCB : Percpu {
 
+    // 获取GHCB的虚拟地址
     fn ghcb(&self) -> VirtAddr;
 
-    fn set_ghcb(&mut self, ghcb_va: VirtAddr);
+    // 获取当前CPU的GHCB物理地址
+    fn get_ghcb(&self) -> Option<PhysAddr>;
 
-    fn map_ghcb(&mut self) -> Option<*mut Ghcb> {
-        println!("setup GHCB");
-        let dune_fd = self.fd();
-        let ghcb = unsafe {
-            mmap(
-                GHCB_MMAP_BASE.as_ptr::<u64>() as *mut libc::c_void,
-                PAGE_SIZE,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED | MAP_FIXED | MAP_POPULATE,
-                dune_fd,
-                0,
-            )
-        };
+    // 设置当前线程的GHCB虚拟地址
+    fn set_ghcb(&mut self, va: VirtAddr);
 
-        if ghcb == MAP_FAILED {
-            eprintln!("dune: failed to map GHCB");
-            return None;
-        }
-
-        let ghcb = ghcb as *mut Ghcb;
-
-        Some(ghcb)
-    }
+    // 在当前进程映射Percpu GHCB页面
+    fn map_ghcb(&mut self) -> Option<*mut Ghcb>;
 
 }
 

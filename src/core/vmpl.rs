@@ -2,9 +2,10 @@ use std::ffi::{c_int, c_void};
 use std::mem::{self};
 use std::sync::Arc;
 use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use libc::{MAP_FAILED,MAP_SHARED,MAP_FIXED,MAP_POPULATE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
-
+use dune_sys::vmpl_get_ghcb;
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
@@ -14,6 +15,8 @@ use crate::{__dune_ret, __dune_enter};
 use core::arch::asm;
 use crate::core::cpuset::WithCpuset;
 use crate::mm::WithPageTable;
+use crate::mm::PAGE_SIZE;
+use crate::vc::{Ghcb, GHCB_MMAP_BASE};
 use crate::vc::WithVC;
 use crate::vc::WithGHCB;
 use crate::syscall::WithHotCalls;
@@ -559,10 +562,49 @@ impl WithGHCB for VmplPercpu {
         VirtAddr::new(0)
     }
 
-    fn set_ghcb(&mut self, ghcb_va: VirtAddr) {
-        todo!();
+    fn set_ghcb(&mut self, va: VirtAddr) {
+        todo!()
     }
 
+    fn get_ghcb(&self) -> Option<PhysAddr>  {
+        log::info!("get GHCB");
+        let vcpu_fd = self.vcpu_fd.fd();
+        let mut ghcb: u64 = 0;
+        let ret = unsafe {vmpl_get_ghcb(vcpu_fd, &mut ghcb).map_err(|e| {
+            log::error!("dune: failed to get GHCB");
+            Error::LibcError(e)
+        })};
+        // convert to option
+        if let Err(_) = ret {
+            return None;
+        }
+        // return ghcb as PhysAddr
+        Some(PhysAddr::new(ghcb))
+    }
+
+    fn map_ghcb(&mut self) -> Option<*mut Ghcb> {
+        log::info!("map GHCB");
+        let vcpu_fd = self.fd();
+        let ghcb = unsafe {
+            mmap(
+                GHCB_MMAP_BASE.as_ptr::<u64>() as *mut libc::c_void,
+                PAGE_SIZE,
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED | MAP_FIXED | MAP_POPULATE,
+                vcpu_fd,
+                0,
+            )
+        };
+
+        if ghcb == MAP_FAILED {
+            eprintln!("dune: failed to map GHCB");
+            return None;
+        }
+
+        let ghcb = ghcb as *mut Ghcb;
+
+        Some(ghcb)
+    }
 }
 
 impl WithVC for VmplPercpu { }
