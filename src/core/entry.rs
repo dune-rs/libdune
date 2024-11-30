@@ -11,6 +11,7 @@ use dune_sys::result::Result;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::Path;
+use std::any::Any;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -75,7 +76,7 @@ thread_local! {
     pub static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
 }
 
-pub trait DuneRoutine : Send + Sync {
+pub trait DuneRoutine : Any + Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
     fn dune_init(&mut self, map_full: bool) -> Result<()>;
     fn dune_enter(&mut self) -> Result<()>;
