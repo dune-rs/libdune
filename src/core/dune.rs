@@ -6,9 +6,12 @@ use std::sync::Arc;
 use std::fmt;
 use x86_64::registers::model_specific::{FsBase, GsBase};
 use x86_64::VirtAddr;
+use x86_64::PhysAddr;
 
 use dune_sys::{funcs, funcs_vec, BaseDevice, BaseSystem, Device, DuneConfig, DuneLayout, DuneRetCode, DuneTrapRegs, IdtDescriptor, Result, Error, Tptr, Tss, WithInterrupt, TSS_IOPB};
 use dune_sys::dune_get_layout;
+use crate::mm::vm::AddressMapping;
+use crate::WithAddressTranslation;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_vm_init, get_fs_base, DuneSyscall, FxSaveArea, WithDuneFpu, DUNE_VM, PGSIZE};
 use crate::__dune_ret;
@@ -255,16 +258,19 @@ pub fn dune_set_user_fs(fs_base: u64) {
 #[derive(Debug, Copy, Clone)]
 pub struct DuneSystem {
     system: BaseSystem,
+    layout: DuneLayout,
     dune_fd: i32,
 }
 
 impl DuneSystem {
     funcs!(system, BaseSystem);
+    funcs!(layout, DuneLayout);
     funcs!(dune_fd, i32);
 
     pub fn new() -> Self {
         DuneSystem {
             system: BaseSystem::new(),
+            layout: DuneLayout::default(),
             dune_fd: -1,
         }
     }
@@ -405,6 +411,27 @@ impl DuneInterrupt for DuneSystem { }
 impl DuneSignal for DuneSystem { }
 #[cfg(feature = "debug")]
 impl DuneDebug for DuneSystem { }
+
+impl WithAddressTranslation for DuneSystem {
+
+    fn setup_address_translation(&mut self) -> Result<()> {
+        let mut layout = DuneLayout::default();
+        let ret = unsafe { dune_get_layout(self.fd(), &mut layout as *mut DuneLayout) };
+        match ret {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Error::LibcError(e)),
+        }
+    }
+
+    fn va_to_pa(&self, va: VirtAddr) -> Result<PhysAddr> {
+        self.layout.va_to_pa(va)
+    }
+
+    fn pa_to_va(&self, pa: PhysAddr) -> Result<VirtAddr> {
+        self.layout.pa_to_va(pa)
+    }
+}
+
 impl DuneMapping for DuneSystem {
 
     fn get_layout(&self) -> Result<DuneLayout> {

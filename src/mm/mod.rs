@@ -3,7 +3,7 @@ mod page;
 mod pgtable;
 #[cfg(feature = "vmpl")]
 mod vma;
-mod vm;
+pub mod vm;
 
 pub use crate::mm::page::*;
 #[cfg(feature = "vmpl")]
