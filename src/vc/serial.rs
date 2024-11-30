@@ -9,6 +9,7 @@ use std::ptr;
  *          Tom Lendacky <thomas.lendacky@amd.com>
  */
 
+use crate::core::Percpu;
 
 const TTYS0: u16 = 0x3f8;
 const DIV_BASE: u32 = 115200;
@@ -80,4 +81,19 @@ pub fn serial_init() {
     vc_outb(PORT + LCR, c);
 
     SERIAL_READY.store(true, Ordering::SeqCst);
+}
+
+#[cfg(feature = "serial")]
+pub trait WithSerial : Percpu {
+    fn serial_out(&self, string: &str) {
+        serial_out(string);
+    }
+
+    fn serial_in(&self, buffer: &mut String) {
+        serial_in(buffer);
+    }
+
+    fn serial_init(&self) {
+        serial_init();
+    }
 }

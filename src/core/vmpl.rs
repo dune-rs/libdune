@@ -29,6 +29,7 @@ use crate::mm::mark_vmpl_pages;
 use crate::vc::{Ghcb, GHCB_MMAP_BASE};
 use crate::vc::WithVC;
 use crate::vc::WithGHCB;
+use crate::vc::WithSerial;
 use crate::syscall::WithHotCalls;
 use crate::security::WithSeimi;
 use super::{DuneRoutine, Percpu, GDT_TEMPLATE, IDT_ENTRIES};
@@ -147,11 +148,6 @@ impl VmplPercpu {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn serial_init() -> Result<()> {
-        todo!()
-    }
-
     fn vmpl_init_pre(&mut self) -> Result<()> {
         log::info!("vmpl_init_pre");
         // Setup CPU set for the thread
@@ -193,7 +189,7 @@ impl VmplPercpu {
 
         // Setup serial port
         #[cfg(feature = "serial")]
-        self::serial_init()?;
+        self.serial_init();
 
         Ok(())
     }
@@ -433,6 +429,9 @@ impl Device for VmplSystem {
         self.system.ioctl(request, arg)
     }
 }
+
+#[cfg(feature = "serial")]
+impl WithSerial for VmplPercpu { }
 
 impl WithInterrupt for VmplSystem {
 
