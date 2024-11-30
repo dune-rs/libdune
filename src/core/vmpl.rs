@@ -6,6 +6,7 @@ use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use libc::{MAP_FAILED,MAP_SHARED,MAP_FIXED,MAP_POPULATE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
+use dune_sys::vmpl_get_layout;
 use dune_sys::vmpl_get_config;
 use dune_sys::vmpl_get_ghcb;
 use dune_sys::vmpl_get_pages;
@@ -468,6 +469,7 @@ impl DuneRoutine for VmplSystem {
         self.setup_hotcalls();
         self.setup_idt();
 
+        self.setup_address_translation()?;
         self.setup_vm()?;
         #[cfg(feature = "mm")]
         self.setup_mm()?;
@@ -561,6 +563,16 @@ impl WithSeimi for VmplSystem { }
 impl WithHotCalls for VmplSystem { }
 
 impl WithAddressTranslation for VmplSystem {
+
+    fn setup_address_translation(&mut self) -> Result<()> {
+        let fd = self.fd();
+        let layout = &mut self.layout;
+        let ret = unsafe { vmpl_get_layout(fd, layout as *mut VmplLayout) };
+        match ret {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Error::LibcError(e)),
+        }
+    }
 
     fn va_to_pa(&self, va: VirtAddr) -> Result<PhysAddr> {
         self.layout.va_to_pa(va)

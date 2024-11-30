@@ -17,6 +17,8 @@ pub fn pgtable_pa_to_va(pa: PhysAddr)  -> VirtAddr {
 
 pub trait WithAddressTranslation {
 
+    fn setup_address_translation(&mut self) -> Result<()>;
+
     fn va_to_pa(&self, va: VirtAddr) -> Result<PhysAddr>;
 
     fn pa_to_va(&self, pa: PhysAddr) -> Result<VirtAddr>;
