@@ -33,6 +33,7 @@ use crate::vc::sys::PVALIDATE_FAIL_SIZE_MISMATCH;
 use crate::vc::Ghcb;
 use crate::vc::SHARED_BUFFER_SIZE;
 use crate::globals::{wrmsrl,rdmsrl};
+use crate::vc::sys::rmpadjust;
 use crate::vc::WithGHCB;
 use crate::vc::GHCB_USAGE;
 use crate::vc::GHCB_VERSION_1;
@@ -155,19 +156,6 @@ fn read_xcr0() -> u64 {
     0
 }
 
-#[test]
-fn main() {
-    let va: u64 = 0x1000; // Example virtual address
-    let page_size: u32 = 4096; // Example page size
-    let validation: u32 = 0; // Example validation
-
-    let pvalidate_result = pvalidate(va.as_u64(), page_size, validation);
-    println!("pvalidate result: {}", pvalidate_result);
-
-    let attrs: u64 = 0; // Example attributes
-    let rmpadjust_result = rmpadjust(va.as_u64(), page_size, attrs);
-    println!("rmpadjust result: {}", rmpadjust_result);
-}
 
 
 /// 2
@@ -374,7 +362,22 @@ macro_rules! GHCB_NAE_SNP_AP_CREATION_REQ {
     };
 }
 
-fn main() {
+#[test]
+fn inst_test() {
+    let va: u64 = 0x1000; // Example virtual address
+    let page_size: u32 = 4096; // Example page size
+    let validation: u32 = 0; // Example validation
+
+    let pvalidate_result = pvalidate(va, page_size, validation);
+    println!("pvalidate result: {}", pvalidate_result);
+
+    let attrs: u64 = 0; // Example attributes
+    let rmpadjust_result = rmpadjust(va, page_size, attrs);
+    println!("rmpadjust result: {}", rmpadjust_result);
+}
+
+#[test]
+fn vc_test() {
     let x: u64 = 0x1234567890abcdef;
     let op: u64 = 0x1;
     let vmpl: u64 = 0x2;

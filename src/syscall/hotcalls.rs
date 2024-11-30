@@ -165,16 +165,12 @@ fn main() {
     setup_hotcalls();
 
     // Example usage
-    let tf = DuneTf {
-        rax: 1, // Example syscall number
-        rdi: 0,
-        rsi: 0,
-        rdx: 0,
-        rcx: 0,
-        r8: 0,
-        r9: 0,
-    };
-
+    let tf = Default::default();
+    // Call openat(0, "/proc/cpuinfo", 0)
+    tf.set_rax(257)
+        .set_rdi(0)
+        .set_rsi(CString::new("/proc/cpuinfo").unwrap().as_ptr() as u64)
+        .set_rdx(0);
     let _result = vmpl_hotcalls_call(&tf);
 
     // Simulate panic to trigger cleanup
