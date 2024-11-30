@@ -12,12 +12,13 @@ use x86_64::structures::paging::PageTable;
 use x86_64::VirtAddr;
 
 use crate::PGSIZE;
+use crate::WithAddressTranslation;
 use crate::mm::Permissions;
 use crate::core::{*};
 use crate::mm::MmapArgs;
 use dune_sys::result::{Error, Result};
 
-pub trait DuneSyscall : Device {
+pub trait DuneSyscall : Device + WithAddressTranslation where Self: Sized {
 
     fn get_syscall(&self) -> Result<VirtAddr> {
         let mut lstar: u64 = 0;
@@ -58,6 +59,6 @@ pub trait DuneSyscall : Device {
                 .set_va(lstara)
                 .set_len((PGSIZE * 2) as u64)
                 .set_perm(Permissions::R)
-                .map()
+                .map(self)
     }
 }

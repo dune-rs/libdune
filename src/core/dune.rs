@@ -16,8 +16,6 @@ use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_vm_init, get_fs_base, DuneSyscall, FxSaveArea, WithDuneFpu, DUNE_VM, PGSIZE};
 use crate::__dune_ret;
 use crate::__dune_enter;
-use crate::map_stack;
-use crate::map_ptr;
 use crate::dune_die;
 use crate::globals::GD_KD;
 use crate::globals::GD_KT;
@@ -215,9 +213,6 @@ impl Percpu for DunePercpu {
         let mut dune_vm = DUNE_VM.lock().unwrap();
         let root = dune_vm.get_mut_root();
 
-        // map the stack into the Dune address space
-        let _ = map_stack();
-
         let mut conf = DuneConfig::default();
         conf.set_vcpu(0)
             .set_rip(&__dune_ret as *const _ as u64)
@@ -347,7 +342,7 @@ impl DuneRoutine for DuneSystem {
                     let percpu = DunePercpu::create();
                     percpu.and_then(|percpu_ptr| {
                         let percpu = unsafe { &mut *percpu_ptr };
-                        percpu.map_ptr()?;
+                        self.map_ptr(VirtAddr::from_ptr(percpu_ptr), mem::size_of::<DunePercpu>())?;
                         match percpu.prepare() {
                             Ok(()) => {
                                 percpu.set_system(&system);
@@ -359,6 +354,8 @@ impl DuneRoutine for DuneSystem {
                             },
                         }
                     }).and_then(|percpu| {
+                        // map the stack into the Dune address space
+                        let _ = self.map_stack();
                         percpu.do_dune_enter().map_err(|e|{
                             DunePercpu::free(percpu);
                             e

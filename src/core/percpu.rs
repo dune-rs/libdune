@@ -28,19 +28,6 @@ pub trait Percpu {
 
     type SystemType: Device;
 
-    fn map_ptr(&self) -> Result<()>
-        where Self: Sized
-    {
-        let ptr = VirtAddr::from_ptr(self as *const Self);
-        log::debug!("mapping percpu at {:x?}", ptr);
-        let ret = map_ptr(ptr, size_of::<Self>());
-        if ret.is_err() {
-            return ret;
-        }
-
-        Ok(())
-    }
-
     fn create() -> Result<*mut Self>
         where Self: Sized
     {

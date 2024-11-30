@@ -203,9 +203,9 @@ impl MmapArgs {
         Self { va, len, perm }
     }
 
-    pub fn map (&self) -> Result<()> {
+    pub fn map (&self, layout: &dyn WithAddressTranslation) -> Result<()> {
         let mut dune_vm = DUNE_VM.lock().unwrap();
-        let pa = dune_vm.layout().va_to_pa(self.va)?;
+        let pa = layout.va_to_pa(self.va)?;
         dune_vm.map_phys(self.va, self.len, pa, self.perm)
     }
 }
