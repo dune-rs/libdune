@@ -12,6 +12,8 @@ use dune_sys::vmpl_get_pages;
 use dune_sys::GetPages;
 use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_config, BaseDevice, BaseSystem, Device, DuneConfig, DuneRetCode, DuneTrapRegs, Error, IdtDescriptor, Result, Tptr, Tss, VcpuConfig, VmsaSeg, WithInterrupt};
 
+use crate::AddressMapping;
+use crate::WithAddressTranslation;
 use crate::globals::rdfsbase;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmplFpu, XSaveArea, PGSIZE};
@@ -22,12 +24,14 @@ use crate::mm::PageManager;
 use crate::mm::WithPageManager;
 use crate::mm::WithPageTable;
 use crate::mm::PAGE_SIZE;
+use crate::mm::mark_vmpl_pages;
 use crate::vc::{Ghcb, GHCB_MMAP_BASE};
 use crate::vc::WithVC;
 use crate::vc::WithGHCB;
 use crate::syscall::WithHotCalls;
 use crate::security::WithSeimi;
 use super::{DuneRoutine, Percpu, GDT_TEMPLATE, IDT_ENTRIES};
+use dune_sys::VmplLayout;
 
 pub struct VmplPercpu {
     percpu_ptr: u64,
@@ -320,13 +324,13 @@ impl Percpu for VmplPercpu {
         gdt[GD_TSS >> 3] = SEG_TSSA | SEG_P | SEG_A | SEG_BASELO!(tss) | SEG_LIM!(mem::size_of::<Tss>() as u64 - 1);
         gdt[GD_TSS2 >> 3] = SEG_BASEHI!(tss);
     }
-
 }
 
 #[derive(Debug, Clone)]
 pub struct VmplSystem {
     system: BaseSystem,
     page_manager: Arc<Mutex<PageManager>>,
+    layout: VmplLayout,
     dune_fd: i32,
 }
 
@@ -338,6 +342,7 @@ impl VmplSystem {
     pub fn new() -> Self {
         VmplSystem {
             system: BaseSystem::new(),
+            layout: VmplLayout::new(),
             page_manager: Arc::new(Mutex::new(PageManager::new())),
             dune_fd: -1,
         }
@@ -554,6 +559,17 @@ impl WithPageManager for VmplSystem {
 impl WithSeimi for VmplSystem { }
 
 impl WithHotCalls for VmplSystem { }
+
+impl WithAddressTranslation for VmplSystem {
+
+    fn va_to_pa(&self, va: VirtAddr) -> Result<PhysAddr> {
+        self.layout.va_to_pa(va)
+    }
+
+    fn pa_to_va(&self, pa: PhysAddr) -> Result<VirtAddr> {
+        self.layout.pa_to_va(pa)
+    }
+}
 
 impl WithCpuset for VmplPercpu { }
 

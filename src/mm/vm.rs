@@ -183,40 +183,8 @@ impl From<Permissions> for CreateType {
 }
 
 pub trait AddressMapping {
-    // fn mmap_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
-    // fn stack_addr_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
-    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr;
-    fn pa_to_va(&self, ptr: PhysAddr) -> VirtAddr;
-}
-
-impl AddressMapping for DuneLayout {
-
-    fn va_to_pa(&self, ptr: VirtAddr) -> PhysAddr {
-        let base_map = self.base_map();
-        let base_stack = self.base_stack();
-        let phys_limit = self.phys_limit();
-        if ptr >= base_stack {
-            PhysAddr::new(ptr.as_u64() - base_stack.as_u64() + phys_limit.as_u64() - GPA_STACK_SIZE as u64)
-        } else if ptr >= base_map {
-            PhysAddr::new(ptr.as_u64() - base_map.as_u64() + phys_limit.as_u64() - (GPA_STACK_SIZE + GPA_MAP_SIZE) as u64)
-        } else {
-            PhysAddr::new(ptr.as_u64())
-        }
-    }
-
-    fn pa_to_va(&self, ptr: PhysAddr) -> VirtAddr {
-        let base_map = self.base_map();
-        let base_stack = self.base_stack();
-        let phys_limit = self.phys_limit();
-        let addr = ptr.as_u64();
-        if addr >= phys_limit.as_u64() - GPA_STACK_SIZE as u64 {
-            VirtAddr::new(addr + base_stack.as_u64() - phys_limit.as_u64() + GPA_STACK_SIZE as u64)
-        } else if addr >= phys_limit.as_u64() - (GPA_STACK_SIZE + GPA_MAP_SIZE) as u64 {
-            VirtAddr::new(addr + base_map.as_u64() - phys_limit.as_u64() + (GPA_STACK_SIZE + GPA_MAP_SIZE) as u64)
-        } else {
-            VirtAddr::new(addr)
-        }
-    }
+    fn va_to_pa(&self, ptr: VirtAddr) -> Result<PhysAddr> where Self: Sized;
+    fn pa_to_va(&self, ptr: PhysAddr) -> Result<VirtAddr> where Self: Sized;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -237,7 +205,7 @@ impl MmapArgs {
 
     pub fn map (&self) -> Result<()> {
         let mut dune_vm = DUNE_VM.lock().unwrap();
-        let pa = dune_vm.layout().va_to_pa(self.va);
+        let pa = dune_vm.layout().va_to_pa(self.va)?;
         dune_vm.map_phys(self.va, self.len, pa, self.perm)
     }
 }
