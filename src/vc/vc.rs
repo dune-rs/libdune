@@ -11,8 +11,8 @@ use core::arch::asm;
 use libc::{mmap, MAP_FAILED, MAP_FIXED, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
+use x86_64::registers::model_specific::Msr;
 use x86_64::structures::paging::PageTableFlags;
-use x86::msr::{rdmsr,wrmsr};
 use nix::errno::Errno;
 use dune_sys::result::Result;
 use x86_64::structures::paging::page_table::PageTableEntry;
@@ -32,7 +32,6 @@ use crate::vc::sys::PVALIDATE_CF_SET;
 use crate::vc::sys::PVALIDATE_FAIL_SIZE_MISMATCH;
 use crate::vc::Ghcb;
 use crate::vc::SHARED_BUFFER_SIZE;
-use crate::globals::{wrmsrl,rdmsrl};
 use crate::vc::sys::rmpadjust;
 use crate::vc::WithGHCB;
 use crate::vc::GHCB_USAGE;
@@ -397,11 +396,13 @@ fn vc_test() {
 }
 
 fn sev_es_rd_ghcb_msr() -> u64 {
-    rdmsrl(MSR_AMD64_SEV_ES_GHCB)
+    let msr = Msr::new(MSR_AMD64_SEV_ES_GHCB);
+    unsafe {msr.read().into()}
 }
 
 fn sev_es_wr_ghcb_msr(val: u64) {
-    wrmsrl(MSR_AMD64_SEV_ES_GHCB, val)
+    let mut msr = Msr::new(MSR_AMD64_SEV_ES_GHCB);
+    unsafe {msr.write(val)};
 }
 
 // static HV_FEATURES: AtomicU64 = AtomicU64::new(0);
@@ -468,7 +469,7 @@ macro_rules! GHCB_PSC_SIZE {
 
 fn vc_terminate(reason_set: u64, reason_code: u64) {
     unsafe {
-        wrmsrl(MSR_AMD64_SEV_ES_GHCB, GHCB_MSR_VMPL_REQ_LEVEL);
+        sev_es_wr_ghcb_msr(GHCB_MSR_VMPL_REQ_LEVEL);
         let mut value = GHCB_MSR_TERMINATE_REQ;
         value |= reason_set << 12;
         value |= reason_code << 16;
@@ -512,11 +513,11 @@ fn vc_msr_protocol(request: u64) -> u64 {
     let response: u64;
     let value: u64;
 
-    value = rdmsrl(MSR_AMD64_SEV_ES_GHCB);
-    wrmsrl(MSR_AMD64_SEV_ES_GHCB, request);
+    value = sev_es_rd_ghcb_msr();
+    sev_es_wr_ghcb_msr(request);
     vc_vmgexit();
-    response = rdmsrl(MSR_AMD64_SEV_ES_GHCB);
-    wrmsrl(MSR_AMD64_SEV_ES_GHCB, value);
+    response = sev_es_rd_ghcb_msr();
+    sev_es_wr_ghcb_msr(value);
 
     response
 }
@@ -748,7 +749,7 @@ fn vc_register_ghcb(pa: PhysAddr) {
         vc_terminate_vmpl_general();
     }
 
-    wrmsrl(MSR_AMD64_SEV_ES_GHCB, pa.as_u64());
+    sev_es_wr_ghcb_msr(pa.as_u64());
 }
 
 #[cfg(feature = "msr_protocol")]
@@ -924,8 +925,7 @@ pub trait WithVC : WithGHCB {
         let pte: &mut PageTableEntry = pgtable_lookup(ghcb_va);
 
         let ghcb_pa = pte.addr();
-        let mut value = 0;
-        value = rdmsrl(MSR_AMD64_SEV_ES_GHCB);
+        let value = sev_es_rd_ghcb_msr();
 
         if value == ghcb_pa.as_u64() {
             self.set_ghcb(ghcb_va);

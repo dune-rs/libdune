@@ -25,7 +25,7 @@ use libc::MAP_FAILED;
 use crate::CreateType;
 use crate::mm::pgtable_va_to_pa;
 
-pub const MSR_AMD64_SEV_ES_GHCB: u64 = 0xc0010130;
+pub const MSR_AMD64_SEV_ES_GHCB: u32 = 0xc0010130;
 pub const GHCB_MMAP_BASE: VirtAddr = VirtAddr::new(0);
 
 /// 1

@@ -3,6 +3,7 @@ use std::arch::asm;
 use std::ptr;
 use std::sync::atomic::{fence, Ordering};
 use std::mem::MaybeUninit;
+use x86_64::registers::model_specific::Msr;
 use libc::sched_getcpu;
 use libc::{sysconf, _SC_NPROCESSORS_CONF};
 use std::ffi::c_void;
@@ -20,12 +21,9 @@ const EOI_ACK: u32 = 0x0;
 static mut APIC_ROUTING: *mut i32 = ptr::null_mut();
 static mut NUM_RT_ENTRIES: i64 = 0;
 
-fn dune_apic_get_id() -> u32 {
-    let mut apic_id: u64 = 0;
-    unsafe {
-        asm!("rdmsr", in("ecx") 0x802, out("eax") apic_id, out("edx") _);
-    }
-    apic_id as u32
+fn dune_apic_get_id() -> u64 {
+    let msr = Msr::new(0x802);
+    unsafe {msr.read()}
 }
 
 pub fn dune_apic_setup() -> Result<()> {
@@ -85,17 +83,17 @@ fn __prepare_icr(shortcut: u32, vector: i32, dest: u32) -> u32 {
     icr
 }
 
-pub fn dune_apic_send_ipi(vector: u8, dest_apic_id: u32) {
+pub fn dune_apic_send_ipi(vector: u8, dest_apic_id: u64) {
     let low = __prepare_icr(0, vector as i32, APIC_DEST_PHYSICAL);
     unsafe {
-        asm!("wrmsr", in("ecx") 0x830, in("eax") low, in("edx") dest_apic_id);
+        let mut msr = Msr::new(0x83F);
+        msr.write(dest_apic_id << 32 | low as u64);
     }
 }
 
 pub fn dune_apic_eoi() {
-    unsafe {
-        asm!("wrmsr", in("ecx") 0x80B, in("eax") EOI_ACK, in("edx") 0);
-    }
+    let mut msr = Msr::new(0x80B);
+    unsafe {msr.write(EOI_ACK as u64)}
 }
 
 pub trait WithDuneAPIC : DuneRoutine {

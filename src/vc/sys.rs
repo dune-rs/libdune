@@ -12,46 +12,6 @@ use core::arch::asm;
 /// Bit 12
 pub const EFER_SVME: u64 = BIT!(12);
 
-/// Read MSR
-pub fn rdmsr(msr: u32) -> u64 {
-    let lo: u32;
-    let hi: u32;
-
-    unsafe {
-        asm!("rdmsr",
-             in("rcx") msr, out("rax") lo, out("rdx") hi,
-             options(nostack));
-    }
-
-    ((hi as u64) << 32) | lo as u64
-}
-
-/// Write to MSR a given value
-pub fn wrmsr(msr: u32, value: u64) {
-    let lo: u32 = value as u32;
-    let hi: u32 = (value >> 32) as u32;
-
-    unsafe {
-        asm!("wrmsr",
-             in("rcx") msr, in("rax") lo, in("rdx") hi,
-             options(nostack));
-    }
-}
-
-/// Execute assembly pause instruction
-pub fn pause() {
-    unsafe {
-        asm!("pause", options(nostack));
-    }
-}
-
-/// Execute assembly hlt instruction (yielding)
-pub fn halt() {
-    unsafe {
-        asm!("hlt", options(nostack));
-    }
-}
-
 /// 1
 pub const PVALIDATE_FAIL_INPUT: u32 = 1;
 /// 6

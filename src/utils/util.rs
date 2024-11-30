@@ -5,7 +5,9 @@ use std::{ptr, str};
 use libc::{sighandler_t, SIG_ERR};
 use libc::{strlen,signal};
 use nix::errno::Errno;
-use x86_64::VirtAddr;
+use x86_64::{VirtAddr, PhysAddr};
+use x86_64::registers::control::{Cr3, Cr3Flags};
+use x86_64::structures::paging::frame::PhysFrame;
 use dune_sys::DuneTf;
 use std::fmt::Write;
 
@@ -46,12 +48,6 @@ pub fn dune_flush_tlb() {
             "mov cr3, rax",
             options(nostack, preserves_flags)
         );
-    }
-}
-
-pub fn load_cr3(cr3: u64) {
-    unsafe {
-        asm!("mov {0}, %cr3", in(reg) cr3, options(att_syntax, nostack, preserves_flags));
     }
 }
 

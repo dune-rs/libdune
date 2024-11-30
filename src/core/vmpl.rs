@@ -6,6 +6,7 @@ use libc::{mmap, munmap, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use libc::{MAP_FAILED,MAP_SHARED,MAP_FIXED,MAP_POPULATE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
+use x86_64::registers::model_specific::FsBase;
 use dune_sys::vmpl_get_layout;
 use dune_sys::vmpl_get_config;
 use dune_sys::vmpl_get_ghcb;
@@ -15,7 +16,6 @@ use dune_sys::{funcs, funcs_vec, vmpl_create_vcpu, vmpl_create_vm, vmpl_set_conf
 
 use crate::AddressMapping;
 use crate::WithAddressTranslation;
-use crate::globals::rdfsbase;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmplFpu, XSaveArea, PGSIZE};
 use crate::__dune_go_dune;
@@ -78,7 +78,7 @@ impl VmplPercpu {
         let percpu_ptr = percpu as *mut VmplPercpu;
         let percpu = unsafe {&mut *percpu_ptr};
 
-        let fsbase = VirtAddr::new(rdfsbase());
+        let fsbase = FsBase::read();
         percpu.set_kfs_base(fsbase)
             .set_ufs_base(fsbase)
             .set_in_usermode(1);

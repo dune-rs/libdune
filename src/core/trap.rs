@@ -11,6 +11,7 @@ use crate::dune_printf;
 use std::arch::asm;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicPtr;
+use x86_64::registers::control::Cr2;
 use x86_64::structures::paging::page_table::PageTableFlags;
 use std::ptr;
 
@@ -25,15 +26,6 @@ pub type DuneIntrCb = extern "C" fn(&mut DuneTf);
 static SYSCALL_CB: AtomicPtr<DuneSyscallCb> = AtomicPtr::new(ptr::null_mut());
 static PGFLT_CB: AtomicPtr<DunePgfltCb> = AtomicPtr::new(ptr::null_mut());
 static INTR_CBS: [AtomicPtr<DuneIntrCb>; IDT_ENTRIES] = [const { AtomicPtr::new(ptr::null_mut()) }; IDT_ENTRIES];
-
-#[inline(always)]
-fn read_cr2() -> u64 {
-    let val: u64;
-    unsafe {
-        asm!("mov {}, cr2", out(reg) val);
-    }
-    val
-}
 
 pub fn dune_register_intr_handler(vec: usize, cb: DuneIntrCb) -> Result<(), i32> {
     if vec >= IDT_ENTRIES {
@@ -145,11 +137,12 @@ pub unsafe extern "C" fn dune_trap_handler(num: usize, tf: &mut DuneTf) {
 
     match num {
         T_PGFLT => {
+            let cr2 = Cr2::read().expect("failed to read cr2").as_u64();
             let pgflt_cb = PGFLT_CB.load(Ordering::SeqCst);
             if !pgflt_cb.is_null() {
-                unsafe { (*pgflt_cb)(read_cr2(), tf.err() as u64, tf) };
+                unsafe { (*pgflt_cb)(cr2, tf.err() as u64, tf) };
             } else {
-                dune_printf!("unhandled page fault {:x} {:x}", read_cr2(), tf.err());
+                dune_printf!("unhandled page fault {:x} {:x}", cr2, tf.err());
                 dune_dump_trap_frame(tf);
                 let _ = dune_procmap_dump();
                 dune_die();
