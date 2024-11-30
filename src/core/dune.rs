@@ -321,9 +321,6 @@ impl DuneRoutine for DuneSystem {
         // Initialize the Dune VM
         dune_vm_init()?;
 
-        let mut dune_vm = DUNE_VM.lock().unwrap();
-        dune_vm.set_layout(self.get_layout()?);
-
         #[cfg(feature = "apic")]
         self.apic_setup()?;
         self.setup_mappings(map_full)?;
@@ -415,8 +412,9 @@ impl DuneDebug for DuneSystem { }
 impl WithAddressTranslation for DuneSystem {
 
     fn setup_address_translation(&mut self) -> Result<()> {
-        let mut layout = DuneLayout::default();
-        let ret = unsafe { dune_get_layout(self.fd(), &mut layout as *mut DuneLayout) };
+        let fd = self.fd();
+        let mut layout = &mut self.layout;
+        let ret = unsafe { dune_get_layout(fd, layout as *mut DuneLayout) };
         match ret {
             Ok(_) => Ok(()),
             Err(e) => Err(Error::LibcError(e)),
@@ -435,12 +433,7 @@ impl WithAddressTranslation for DuneSystem {
 impl DuneMapping for DuneSystem {
 
     fn get_layout(&self) -> Result<DuneLayout> {
-        let mut layout = DuneLayout::default();
-        let ret = unsafe { dune_get_layout(self.fd(), &mut layout as *mut DuneLayout) };
-        match ret {
-            Ok(_) => Ok(layout),
-            Err(e) => Err(Error::LibcError(e)),
-        }
+        Ok(self.layout)
     }
 }
 impl DuneSyscall for DuneSystem { }

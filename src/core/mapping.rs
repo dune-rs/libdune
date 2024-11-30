@@ -7,6 +7,8 @@ use crate::mm::MmapArgs;
 use crate::utils::rd_rsp;
 use x86_64::PhysAddr;
 use crate::mm::AddressMapping;
+use crate::WithAddressTranslation;
+use crate::DUNE_VM;
 use dune_sys::result::Result;
 
 const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
@@ -159,12 +161,15 @@ pub fn map_stack() -> Result<()> {
     })
 }
 
-pub trait DuneMapping {
+pub trait DuneMapping : WithAddressTranslation {
 
     fn get_layout(&self) -> Result<DuneLayout>;
 
-    fn setup_mappings(&self, full: bool) -> Result<()> {
+    fn setup_mappings(&mut self, full: bool) -> Result<()> {
+        self.setup_address_translation()?;
         let layout = self.get_layout()?;
+        let mut dune_vm = DUNE_VM.lock().unwrap();
+        dune_vm.set_layout(layout);
 
         if full {
             __setup_mappings_full(&layout)
