@@ -113,8 +113,6 @@ pub trait DuneMapping : WithAddressTranslation where Self: Sized {
     fn setup_mappings(&mut self, full: bool) -> Result<()> {
         self.setup_address_translation()?;
         let layout = self.get_layout()?;
-        let mut dune_vm = DUNE_VM.lock().unwrap();
-        dune_vm.set_layout(layout);
 
         if full {
             self.__setup_mappings_full(&layout)

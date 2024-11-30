@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 use std::{default, ptr};
-use dune_sys::{funcs, DuneLayout};
+use dune_sys::funcs;
 use libc::c_void;
 use nix::errno::Errno;
 use x86_64::structures::paging::page_table::PageTableLevel;
@@ -246,17 +246,13 @@ impl From<&DuneProcmapEntry> for MmapArgs {
 
 pub struct DuneVm {
     root: PageTable,
-    layout: DuneLayout,
 }
 
 impl DuneVm {
 
-    funcs!(layout, DuneLayout);
-
     pub fn new() -> Self {
         DuneVm {
             root: PageTable::new(),
-            layout: DuneLayout::default(),
         }
     }
 
