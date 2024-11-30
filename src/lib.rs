@@ -17,6 +17,7 @@ pub mod fpu;
 pub mod syscall;
 #[macro_use]
 pub mod utils;
+pub mod security;
 
 pub use dune_sys::{Error, Result};
 
