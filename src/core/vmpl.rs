@@ -211,19 +211,6 @@ impl VmplPercpu {
         Ok(())
     }
 
-    fn do_dune_enter(&mut self) -> Result<()> {
-        self.vmpl_init_pre()?;
-
-        // Dump configs
-        self.dump_configs();
-
-        self.__do_dune_enter()?;
-
-        self.dune_boot()?;
-        self.vmpl_init_post()?;
-
-        Ok(())
-    }
 
 }
 
@@ -248,7 +235,6 @@ impl Device for VmplPercpu {
 
 impl Percpu for VmplPercpu {
 
-    type SelfType = VmplPercpu;
     type SystemType = VmplSystem;
 
 
@@ -302,8 +288,27 @@ impl Percpu for VmplPercpu {
         self.system = Arc::clone(system);
     }
 
-    fn post_dune_boot(&mut self) {
-        // Implement the post_dune_boot function
+    fn dune_boot(&mut self) -> Result<()> {
+        // Implement the dune_boot function
+        todo!()
+    }
+
+    fn do_dune_enter(&mut self) -> Result<()> {
+        self.vmpl_init_pre()?;
+
+        // Dump configs
+        self.dump_configs();
+
+        self.__do_dune_enter()?;
+
+        self.dune_boot()?;
+        self.vmpl_init_post()?;
+
+        Ok(())
+    }
+
+    fn dune_enter_ex(&mut self) -> Result<()> {
+        // Implement the dune_enter_exit function
         todo!()
     }
 

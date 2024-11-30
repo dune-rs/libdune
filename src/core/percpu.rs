@@ -26,17 +26,14 @@ const SAFE_STACK_SIZE: usize = PGSIZE;
 
 pub trait Percpu {
 
-    type SelfType: Percpu;
     type SystemType: Device;
 
-    // XXX free stack
-    fn free(ptr: *mut Self::SelfType) {
-        unsafe { munmap(ptr as *const _ as *mut c_void, PGSIZE as usize) };
-    }
-
-    fn map_ptr(&self, ret: *mut Self::SelfType) -> Result<()> {
-        let ptr = VirtAddr::from_ptr(ret);
-        let ret = map_ptr(ptr, size_of::<Self::SelfType>());
+    fn map_ptr(&self) -> Result<()>
+        where Self: Sized
+    {
+        let ptr = VirtAddr::from_ptr(self as *const Self);
+        log::debug!("mapping percpu at {:x?}", ptr);
+        let ret = map_ptr(ptr, size_of::<Self>());
         if ret.is_err() {
             return ret;
         }
@@ -44,7 +41,9 @@ pub trait Percpu {
         Ok(())
     }
 
-    fn create() -> Result<*mut Self::SelfType> {
+    fn create() -> Result<*mut Self>
+        where Self: Sized
+    {
         let fs_base = get_fs_base()?;
         unsafe {
             let ret = mmap(
@@ -58,13 +57,22 @@ pub trait Percpu {
             if ret == MAP_FAILED {
                 return Err(Error::LibcError(Errno::last()));
             }
-            Ok(ret as *mut Self::SelfType)
+            Ok(ret as *mut Self)
         }
+    }
+
+    fn free(ptr: *mut Self)
+        where Self: Sized
+    {
+        // XXX free stack
+        unsafe { munmap(ptr as *const _ as *mut c_void, PGSIZE as usize) };
     }
 
     fn prepare(&mut self) -> Result<()>;
 
-    fn map_safe_stack() -> Result<*mut c_void> {
+    fn map_safe_stack() -> Result<*mut c_void>
+        where Self: Sized
+    {
         let safe_stack: *mut c_void = unsafe {mmap(
             std::ptr::null_mut(),
             SAFE_STACK_SIZE,
@@ -97,88 +105,9 @@ pub trait Percpu {
      * dune_boot - Brings the user-level OS online
      * @percpu: the thread-local data
      */
-    fn dune_boot(&mut self) -> Result<()> {
-        self.setup_gdt();
-        let gdtr = self.gdtr();
-        let idtr = self.idtr();
+    fn dune_boot(&mut self) -> Result<()>;
 
-        unsafe {
-            asm!(
-                // STEP 1: load the new GDT
-                "lgdt ({0})",
+    fn do_dune_enter(&mut self) -> Result<()>;
 
-                // STEP 2: initialize data segments
-                "mov {1:x}, %ax",
-                "mov %ax, %ds",
-                "mov %ax, %es",
-                "mov %ax, %ss",
-
-                // STEP 3: long jump into the new code segment
-                "mov {2:r}, %rax",
-                "pushq %rax",
-                "leaq 2f(%rip), %rax",
-                "pushq %rax",
-                "lretq",
-                "2:",
-                "nop",
-
-                // STEP 4: load the task register (for safe stack switching)
-                "mov {3:x}, %ax",
-                "ltr %ax",
-
-                // STEP 5: load the new IDT and enable interrupts
-                "lidt ({4})",
-                "sti",
-
-                in(reg) &gdtr,
-                in(reg) GD_KD,
-                in(reg) GD_KT,
-                in(reg) GD_TSS,
-                in(reg) &idtr,
-                options(nostack, preserves_flags, att_syntax)
-            );
-        }
-
-        self.post_dune_boot();
-
-        Ok(())
-    }
-
-    fn post_dune_boot(&mut self);
-
-    fn do_dune_enter(&mut self) -> Result<()> {
-        let mut dune_vm = DUNE_VM.lock().unwrap();
-        let root = dune_vm.get_mut_root();
-
-        // map the stack into the Dune address space
-        let _ = map_stack();
-
-        let mut conf = DuneConfig::default();
-        conf.set_vcpu(0)
-            .set_rip(&__dune_ret as *const _ as u64)
-            .set_rsp(0)
-            .set_cr3(root as *const _ as u64)
-            .set_rflags(0x2);
-
-        // NOTE: We don't setup the general purpose registers because __dune_ret
-        // will restore them as they were before the __dune_enter call
-
-        let dune_fd = self.system().fd();
-        let ret = unsafe { __dune_enter(dune_fd, &conf) };
-        if ret != 0 {
-            println!("dune: entry to Dune mode failed, ret is {}", ret);
-            return Err(Error::Unknown);
-        }
-
-        self.dune_boot().map_err(|e|{
-            println!("dune: failed to boot Dune mode: {:?}", e);
-            unsafe { dune_die() };
-            e
-        })
-    }
-
-    fn dune_enter_ex(&mut self) -> Result<()> {
-        self.prepare()?;
-        self.do_dune_enter()
-    }
+    fn dune_enter_ex(&mut self) -> Result<()>;
 }

@@ -11,7 +11,13 @@ use dune_sys::{funcs, funcs_vec, BaseDevice, BaseSystem, Device, DuneConfig, Dun
 use dune_sys::dune_get_layout;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{dune_vm_init, get_fs_base, DuneSyscall, FxSaveArea, WithDuneFpu, DUNE_VM, PGSIZE};
-
+use crate::__dune_ret;
+use crate::__dune_enter;
+use crate::map_stack;
+use crate::map_ptr;
+use crate::dune_die;
+use crate::globals::GD_KD;
+use crate::globals::GD_KT;
 use crate::core::WithDuneAPIC;
 use super::cpuset::WithCpuset;
 use super::{DuneDebug, DuneInterrupt, DuneMapping, DuneRoutine, Percpu, __dune_go_dune, GDT_TEMPLATE, IDT_ENTRIES, LPERCPU};
@@ -93,7 +99,6 @@ impl Device for DunePercpu {
 
 impl Percpu for DunePercpu {
 
-    type SelfType = DunePercpu;
     type SystemType = DuneSystem;
 
     fn setup_gdt(&mut self) {
@@ -154,12 +159,89 @@ impl Percpu for DunePercpu {
         Ok(())
     }
 
-    fn post_dune_boot(&mut self) {
+    fn dune_boot(&mut self) -> Result<()> {
+        self.setup_gdt();
+        let gdtr = self.gdtr();
+        let idtr = self.idtr();
+
+        unsafe {
+            asm!(
+                // STEP 1: load the new GDT
+                "lgdt ({0})",
+
+                // STEP 2: initialize data segments
+                "mov {1:x}, %ax",
+                "mov %ax, %ds",
+                "mov %ax, %es",
+                "mov %ax, %ss",
+
+                // STEP 3: long jump into the new code segment
+                "mov {2:r}, %rax",
+                "pushq %rax",
+                "leaq 2f(%rip), %rax",
+                "pushq %rax",
+                "lretq",
+                "2:",
+                "nop",
+
+                // STEP 4: load the task register (for safe stack switching)
+                "mov {3:x}, %ax",
+                "ltr %ax",
+
+                // STEP 5: load the new IDT and enable interrupts
+                "lidt ({4})",
+                "sti",
+
+                in(reg) &gdtr,
+                in(reg) GD_KD,
+                in(reg) GD_KT,
+                in(reg) GD_TSS,
+                in(reg) &idtr,
+                options(nostack, preserves_flags, att_syntax)
+            );
+        }
+
         // STEP 6: FS and GS require special initialization on 64-bit
         FsBase::write(self.kfs_base);
         GsBase::write(VirtAddr::new(self as *const _ as u64));
+
+        Ok(())
     }
 
+    fn do_dune_enter(&mut self) -> Result<()> {
+        let mut dune_vm = DUNE_VM.lock().unwrap();
+        let root = dune_vm.get_mut_root();
+
+        // map the stack into the Dune address space
+        let _ = map_stack();
+
+        let mut conf = DuneConfig::default();
+        conf.set_vcpu(0)
+            .set_rip(&__dune_ret as *const _ as u64)
+            .set_rsp(0)
+            .set_cr3(root as *const _ as u64)
+            .set_rflags(0x2);
+
+        // NOTE: We don't setup the general purpose registers because __dune_ret
+        // will restore them as they were before the __dune_enter call
+        let dune_fd = self.fd();
+        let ret = unsafe { __dune_enter(dune_fd, &conf) };
+        if ret != 0 {
+            println!("dune: entry to Dune mode failed, ret is {}", ret);
+            return Err(Error::Unknown);
+        }
+
+        self.dune_boot().map_err(|e|{
+            println!("dune: failed to boot Dune mode: {:?}", e);
+            unsafe { dune_die() };
+            e
+        })
+    }
+
+    fn dune_enter_ex(&mut self) -> Result<()> {
+        self.prepare()?;
+        self.do_dune_enter()
+    }
 }
 
 pub fn dune_get_user_fs() -> u64 {
@@ -262,7 +344,7 @@ impl DuneRoutine for DuneSystem {
                     let percpu = DunePercpu::create();
                     percpu.and_then(|percpu_ptr| {
                         let percpu = unsafe { &mut *percpu_ptr };
-                        percpu.map_ptr(percpu_ptr)?;
+                        percpu.map_ptr()?;
                         match percpu.prepare() {
                             Ok(()) => {
                                 percpu.set_system(&system);
