@@ -25,6 +25,15 @@ pub const PAGE_FLAG_MAPPED: u32 = 0x1;
 pub const PGSIZE: usize = 1 << PAGE_SHIFT;
 pub const PAGE_SIZE: usize = 4096;
 
+// 使用环境变量,如果没有设置则使用 feature 指定的默认值
+#[allow(non_upper_case_globals)]
+const CONFIG_VMPL_PAGE_GROW_SIZE: usize = 
+    env!("VMPL_PAGE_GROW_SIZE").parse().unwrap();
+
+#[allow(non_upper_case_globals)]
+const CONFIG_DUNE_PAGE_GROW_SIZE: usize = 
+    env!("DUNE_PAGE_GROW_SIZE").parse().unwrap();
+
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -56,6 +65,7 @@ impl Page {
 
 #[derive(Debug, Clone)]
 pub struct PageManager {
+    fd: RawFd,
     pages: Vec<Page>,
     num_dune_pages: usize,
     num_vmpl_pages: usize,
@@ -64,8 +74,12 @@ pub struct PageManager {
 }
 
 impl PageManager {
-    pub fn new() -> Self {
+
+    funcs!(fd, RawFd);
+
+    pub fn new(fd: RawFd) -> Self {
         PageManager {
+            fd,
             pages: Vec::with_capacity(MAX_PAGES),
             num_dune_pages: 0,
             num_vmpl_pages: 0,
@@ -74,14 +88,14 @@ impl PageManager {
         }
     }
 
-    fn do_mapping(&self, fd: RawFd, phys: u64, len: usize) -> *mut c_void {
+    fn do_mapping(&self, phys: u64, len: usize) -> *mut c_void {
         let addr = unsafe {
             libc::mmap(
                 (PAGEBASE.as_u64() + phys) as *mut c_void,
                 len,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
-                fd,
+                self.fd,
                 phys as libc::off_t,
             )
         };
@@ -99,11 +113,10 @@ impl PageManager {
         addr
     }
 
-    fn grow_pages(&self, fd: RawFd, head: &Mutex<LinkedList<Arc<Mutex<Page>>>>, num_pages: usize, mapping: bool) -> Result<()> {
+    fn grow_pages(&self, head: &Mutex<LinkedList<Arc<Mutex<Page>>>>, num_pages: usize, mapping: bool) -> Result<()> {
         let mut param = GetPages::new();
-        //  { num_pages, phys: 0 };
         param.set_num_pages(num_pages);
-        let rc = unsafe { vmpl_get_pages(fd, &mut param) };
+        let rc = unsafe { vmpl_get_pages(self.fd, &mut param) };
         if rc != Ok(0) {
             eprintln!("Failed to allocate {} pages", num_pages);
             return Err(Error::LibcError(Errno::ENOMEM));
@@ -122,7 +135,7 @@ impl PageManager {
             return Ok(());
         }
 
-        let ptr = self.do_mapping(fd, param.phys(), num_pages << PAGE_SHIFT);
+        let ptr = self.do_mapping(param.phys(), num_pages << PAGE_SHIFT);
         if ptr.is_null() {
             eprintln!("Failed to map pages");
             return Err(Error::LibcError(Errno::ENOMEM));
@@ -131,26 +144,26 @@ impl PageManager {
         Ok(())
     }
 
-    fn vmpl_grow_pages(&mut self, fd: RawFd) -> Result<()> {
+    fn vmpl_grow_pages(&mut self) -> Result<()> {
         let num_pages = CONFIG_VMPL_PAGE_GROW_SIZE;
-        self.grow_pages(fd, &self.vmpl_pages_free, num_pages, false)?;
+        self.grow_pages(&self.vmpl_pages_free, num_pages, false)?;
         self.num_vmpl_pages += num_pages;
         Ok(())
     }
 
-    fn vmpl_page_init(&mut self, fd: RawFd) -> Result<()> {
-        if self.vmpl_grow_pages(fd).is_err() {
+    fn vmpl_page_init(&mut self) -> Result<()> {
+        if self.vmpl_grow_pages().is_err() {
             return Err(Error::LibcError(Errno::ENOMEM));
         }
 
         Ok(())
     }
 
-    pub fn vmpl_page_alloc(&mut self, fd: RawFd) -> Option<Arc<Mutex<Page>>> {
+    pub fn vmpl_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>> {
         let mut head_guard = self.vmpl_pages_free.lock().unwrap();
         if head_guard.is_empty() {
             drop(head_guard);
-            if self.vmpl_grow_pages(fd).is_err() {
+            if self.vmpl_grow_pages().is_err() {
                 return None;
             }
             head_guard = self.vmpl_pages_free.lock().unwrap();
@@ -219,26 +232,25 @@ impl PageManager {
         PAGEBASE + (pg_index << PAGE_SHIFT) as u64
     }
 
-    fn dune_grow_pages(&mut self, fd: RawFd) -> Result<()> {
+    fn dune_grow_pages(&mut self) -> Result<()> {
         let num_pages = CONFIG_DUNE_PAGE_GROW_SIZE;
-        self.grow_pages(fd, &self.dune_pages_free, num_pages, true)?;
+        self.grow_pages(&self.dune_pages_free, num_pages, true)?;
         self.num_dune_pages += num_pages;
         Ok(())
     }
 
-    fn dune_page_init(&mut self, fd: RawFd) -> Result<()> {
-        if self.dune_grow_pages(fd).is_err() {
+    fn dune_page_init(&mut self) -> Result<()> {
+        if self.dune_grow_pages().is_err() {
             return Err(Error::LibcError(Errno::ENOMEM));
         }
-
         Ok(())
     }
 
-    pub fn dune_page_alloc(&mut self, fd: RawFd) -> Option<Arc<Mutex<Page>>> {
+    pub fn dune_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>> {
         let mut head_guard = self.dune_pages_free.lock().unwrap();
         if head_guard.is_empty() {
             drop(head_guard);
-            if self.dune_grow_pages(fd).is_err() {
+            if self.dune_grow_pages().is_err() {
                 return None;
             }
             head_guard = self.dune_pages_free.lock().unwrap();
@@ -278,7 +290,7 @@ impl PageManager {
     }
 
 
-    pub fn page_init(&mut self, fd: RawFd) -> Result<()> {
+    pub fn page_init(&mut self) -> Result<()> {
         // 申请MAX_PAGES个Page结构体
         let layout = Layout::array::<Page>(MAX_PAGES).unwrap();
         let pages_ptr = unsafe { alloc_zeroed(layout) as *mut Page };
@@ -288,8 +300,8 @@ impl PageManager {
             Vec::from_raw_parts(pages_ptr, MAX_PAGES, MAX_PAGES)
         };
 
-        self.vmpl_page_init(fd)?;
-        self.dune_page_init(fd)?;
+        self.vmpl_page_init()?;
+        self.dune_page_init()?;
 
         Ok(())
     }
@@ -309,8 +321,14 @@ impl PageManager {
 
 lazy_static! {
     pub static ref PAGE_MANAGER: Arc<Mutex<PageManager>> = {
-        Arc::new(Mutex::new(PageManager::new()))
+        Arc::new(Mutex::new(PageManager::new(-1)))
     };
+}
+
+pub fn init_page_manager(fd: RawFd) -> Result<()> {
+    let mut pm = PAGE_MANAGER.lock().unwrap();
+    *pm = PageManager::new(fd);
+    pm.page_init()
 }
 
 #[no_mangle]
@@ -320,10 +338,9 @@ pub fn dune_page_isfrompool(pa: PhysAddr) -> bool {
 }
 
 #[no_mangle]
-pub fn dune_page_alloc(fd: i32) -> Result<Arc<Mutex<Page>>> {
+pub fn dune_page_alloc() -> Result<Arc<Mutex<Page>>> {
     let mut pm = PAGE_MANAGER.lock().unwrap();
-    let a = pm.dune_page_alloc(fd).unwrap();
-    Ok(a)
+    pm.dune_page_alloc().ok_or(Error::Unknown)
 }
 
 #[no_mangle]
@@ -358,8 +375,7 @@ pub fn dune_page2pa(page: Arc<Mutex<Page>>) -> PhysAddr {
 
 pub fn dune_page_init(fd: i32) -> Result<()> {
     lazy_static::initialize(&PAGE_MANAGER);
-    let mut pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page_init(fd)
+    init_page_manager(fd)
 }
 
 #[no_mangle]
@@ -368,10 +384,22 @@ pub fn dune_page_stats() {
     pm.dune_page_stats()
 }
 
-pub trait WithPageManager {
+pub trait WithPageManager + Device {
 
     // 获取页管理器的引用
     fn page_manager(&self) -> Arc<Mutex<PageManager>>;
+
+    // 初始化页管理器
+    fn page_init(&self) -> Result<()> {
+        let mut pm = self.page_manager().lock().unwrap();
+        pm.set_fd(self.fd());
+        pm.page_init()
+    }
+
+    fn page_exit(&self) {
+        let mut pm = self.page_manager().lock().unwrap();
+        pm.page_exit()
+    }
 
     // 向Guest OS申请num_pages个物理页
     fn get_pages(&self, num_pages: usize) -> Result<PhysAddr>;
@@ -448,12 +476,12 @@ mod tests {
         let mut pm = PageManager::new();
         pm.page_init(0).unwrap();
         pm.page_stats();
-        let page = pm.dune_page_alloc(0).unwrap();
+        let page = pm.dune_page_alloc().unwrap();
         let pa = pm.vmpl_page2pa(page);
         assert!(pm.vmpl_page_is_from_pool(pa));
         println!("pa: {:x}", pa);
         for _ in 0..10 {
-            let page = pm.dune_page_alloc(0).unwrap();
+            let page = pm.dune_page_alloc().unwrap();
             let pa = pm.vmpl_page2pa(page);
             println!("pa: {:x}", pa);
             pm.dune_page_free(page);
@@ -463,16 +491,3 @@ mod tests {
         pm.page_stats();
     }
 }
-
-#[repr(C)]
-struct get_pages_t {
-    num_pages: usize,
-    phys: u64,
-}
-
-extern "C" {
-    fn vmpl_ioctl_get_pages(fd: RawFd, param: *mut get_pages_t) -> i32;
-}
-
-const CONFIG_VMPL_PAGE_GROW_SIZE: usize = 1024;
-const CONFIG_DUNE_PAGE_GROW_SIZE: usize = 1024;
