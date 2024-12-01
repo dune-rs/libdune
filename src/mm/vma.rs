@@ -7,6 +7,8 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::sync::Mutex;
 
+use dune_sys::result::{Result, Error};
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Vma {
     pub start: u64,
@@ -112,11 +114,12 @@ impl Vma {
     }
 }
 
-pub fn parse_procmaps<F>(callback: F) -> io::Result<()>
+pub fn parse_procmaps<F>(callback: F) -> Result<()>
 where
     F: Fn(&Vma),
 {
-    let file = File::open("/proc/self/maps")?;
+    let file = File::open("/proc/self/maps")
+        .map_err(|e| Error::LibcError(e))?;
     let reader = io::BufReader::new(file);
 
     for line in reader.lines() {
@@ -582,7 +585,7 @@ fn associate_pkey_callback(vma: &Vma, pkey: &u64) {
 
 impl VmplVm {
     #[allow(dead_code)]
-    pub fn init(&mut self, va_start: u64, va_size: usize) -> Result<(), io::Error> {
+    pub fn init(&mut self, va_start: u64, va_size: usize) -> Result<()> {
         let va_end = va_start + va_size as u64;
 
         // VMPL Preserve Kernel Mapping
@@ -591,7 +594,7 @@ impl VmplVm {
         // Allocate the Protection Key
         let pkey = unsafe { libc::syscall( libc::SYS_pkey_alloc, 0, 0) };
         if pkey == -1 {
-            return Err(io::Error::last_os_error());
+            return Err(Error::LibcError(io::Error::last_os_error()));
         }
 
         // VMPL VMA Management
@@ -604,7 +607,7 @@ impl VmplVm {
     }
 
     #[allow(dead_code)]
-    pub fn init_procmaps(&self) -> Result<(), io::Error> {
+    pub fn init_procmaps(&self) -> Result<()> {
         // Touch each VMA in the VMA dictionary
         parse_procmaps(touch_vma_callback)?;
 

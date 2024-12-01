@@ -693,7 +693,7 @@ pub trait WithVmplMemory : WithPageTable {
 
         // VMPL-VM Abstraction
         let vmpl_vm = self.get_vmpl_vm();
-        vmpl_vm.init(VMPL_VA_START, VMPL_VA_SIZE).map_err(|e| Error::Unknown)?;
+        vmpl_vm.init(VMPL_VA_START, VMPL_VA_SIZE)?;
 
         // VMPL Page Table Management
         self.pgtable_init()?;
@@ -743,14 +743,14 @@ pub trait WithVmplMemory : WithPageTable {
 // 需要提供fd，以初始化虚拟内存和物理内存管理
 pub trait WithVirtualMemory : WithVmplMemory {
 
-    fn setup_stack(stack_size: usize) -> Result<(), i32> {
+    fn setup_stack(stack_size: usize) -> Result<()> {
         info!("setup stack");
 
         let mut rl: rlimit = unsafe { std::mem::zeroed() };
         let rc = unsafe { getrlimit(RLIMIT_STACK, &mut rl) };
         if rc != 0 {
             error!("dune: failed to get stack size");
-            return Err(rc);
+            return Err(Error::LibcError(Errno::ENOMEM));
         }
 
         if rl.rlim_cur < stack_size as u64 {
@@ -758,28 +758,28 @@ pub trait WithVirtualMemory : WithVmplMemory {
             let rc = unsafe { setrlimit(RLIMIT_STACK, &rl) };
             if rc != 0 {
                 error!("dune: failed to set stack size");
-                return Err(rc);
+                return Err(Error::LibcError(Errno::ENOMEM));
             }
         }
 
         Ok(())
     }
 
-    fn setup_heap(increase_size: usize) -> Result<(), i32> {
+    fn setup_heap(increase_size: usize) -> Result<()> {
         info!("setup heap");
 
         let mut rl: rlimit = unsafe { std::mem::zeroed() };
         let rc = unsafe { getrlimit(RLIMIT_DATA, &mut rl) };
         if rc != 0 {
             error!("dune: failed to get heap size");
-            return Err(rc);
+            return Err(Error::LibcError(Errno::ENOMEM));
         }
 
         rl.rlim_cur += increase_size as u64;
         let rc = unsafe { setrlimit(RLIMIT_DATA, &rl) };
         if rc != 0 {
             error!("dune: failed to set heap size");
-            return Err(rc);
+            return Err(Error::LibcError(Errno::ENOMEM));
         }
 
         Ok(())
@@ -788,8 +788,8 @@ pub trait WithVirtualMemory : WithVmplMemory {
     fn setup_mm(&mut self) -> Result<()> {
         log::info!("setup mm");
 
-        Self::setup_stack(&mut self);
-        Self::setup_heap();
+        Self::setup_stack()?;
+        Self::setup_heap()?;
 
         let ret = unsafe {mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)};
         if ret < 0 {
