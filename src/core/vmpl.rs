@@ -284,11 +284,13 @@ pub struct VmplSystem {
     page_manager: Arc<Mutex<PageManager>>,
     layout: VmplLayout,
     dune_fd: i32,
+    page_table: Option<*mut PageTable>,
 }
 
 impl VmplSystem {
     funcs!(system, BaseSystem);
     funcs!(dune_fd, i32);
+    funcs_opt!(page_table, *mut PageTable);
 
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -297,6 +299,7 @@ impl VmplSystem {
             layout: VmplLayout::new(),
             page_manager: Arc::new(Mutex::new(PageManager::new())),
             dune_fd: -1,
+            page_table: None,
         }
     }
 
@@ -366,6 +369,33 @@ impl VmplSystem {
         };
     }
 
+    /// 清除页表指针
+    pub fn clear_pgtable(&mut self) {
+        // 如果页表存在,需要先解除映射
+        if let Some(pt) = self.page_table {
+            if !pt.is_null() {
+                unsafe {
+                    libc::munmap(
+                        pt as *mut libc::c_void,
+                        PAGE_SIZE
+                    );
+                }
+            }
+        }
+        self.page_table = None;
+    }
+
+    /// 检查是否有有效的页表
+    pub fn has_valid_pgtable(&self) -> bool {
+        self.page_table.map_or(false, |pt| !pt.is_null())
+    }
+}
+
+// 为了安全性,在 Drop 时确保页表被正确清理
+impl Drop for VmplSystem {
+    fn drop(&mut self) {
+        self.clear_pgtable();
+    }
 }
 
 impl Device for VmplSystem {
@@ -577,11 +607,11 @@ impl WithPageTable for VmplSystem {
 
     fn get_cr3(&self) -> Option<PhysAddr> {
         unsafe {
-            let mut cr3: u64 =  0;
+            let mut cr3: u64 = 0;
             let ret = vmpl_get_cr3(self.fd(), &mut cr3).map_err(|e| {
                 log::error!("dune: failed to get CR3");
                 Error::LibcError(e)
-            }).unwrap();
+            }).ok()?;
             if ret < 0 {
                 return None;
             }
@@ -590,14 +620,13 @@ impl WithPageTable for VmplSystem {
     }
 
     fn do_mapping(&self, phys: PhysAddr, len: usize) -> Result<*mut PageTable> {
-        let fd = self.fd();
         let addr = unsafe {
             mmap(
                 (PGTABLE_MMAP_BASE + phys.as_u64()) as *mut _,
                 len,
                 PROT_READ | PROT_WRITE,
                 MAP_SHARED | MAP_POPULATE,
-                fd,
+                self.fd(),
                 phys.as_u64() as i64,
             )
         };
@@ -612,7 +641,23 @@ impl WithPageTable for VmplSystem {
     }
 
     fn get_page_table(&self) -> Result<&mut PageTable> {
-        todo!()
+        match self.page_table() {
+            Some(pt) => {
+                if pt.is_null() {
+                    return Err(Error::NotFound);
+                }
+                Ok(unsafe { &mut *pt })
+            }
+            None => {
+                let cr3 = self.get_cr3().ok_or(Error::NotFound)?;
+                
+                let pt = self.do_mapping(cr3, PAGE_SIZE)?;
+                
+                self.set_page_table(Some(pt));
+                
+                Ok(unsafe { &mut *pt })
+            }
+        }
     }
 }
 
