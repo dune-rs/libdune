@@ -140,41 +140,40 @@ fn pgtable_alloc() {
 }
 
 pub fn pgtable_lookup(va: VirtAddr) -> Result<&'static mut PageTableEntry> {
-    let device = DEVICE.lock().unwrap();
-    let device = device.as_ref().ok_or(Error::NotFound)?;
-    
-    // 先转换为 Any 类型
-    let any_device = device.as_any();
-    
-    // 尝试下转型为 WithPageTable
-    if let Some(page_table) = any_device.downcast_ref::<dyn WithPageTable>() {
-        page_table.pgtable_lookup(va)
+    let system = get_system::<dyn WithPageTable>();
+    if let Some(system) = system {
+        system.pgtable_lookup(va)
     } else {
-        Err(Error::NotSupported)
+        log::error!("pgtable_lookup: system does not implement WithPageTable");
+        Err(Error::NotFound)
     }
 }
 
 pub fn pgtable_va_to_pa(va: VirtAddr) -> Result<PhysAddr> {
-    let device = DEVICE.lock().unwrap();
-    let device = device.as_ref().ok_or(Error::NotFound)?;
-    
-    let any_device = device.as_any();
-    if let Some(page_table) = any_device.downcast_ref::<dyn WithPageTable>() {
-        page_table.va_to_pa(va)
+    let system = get_system::<dyn WithAddressTranslation>();
+    if let Some(system) = system {
+        system.va_to_pa(va).map_err(|e| {
+            let system = get_system::<dyn WithPageTable>();
+            if let Some(system) = system {
+                system.pgtable_lookup(va)
+            } else {
+                log::error!("pgtable_va_to_pa: system does not implement WithPageTable");
+                Err(Error::NotFound)
+            }
+        })
     } else {
-        Err(Error::NotSupported)
+        log::error!("pgtable_va_to_pa: system does not implement WithAddressTranslation");
+        Err(Error::NotFound)
     }
 }
 
 pub fn pgtable_pa_to_va(pa: PhysAddr) -> Result<VirtAddr> {
-    let device = DEVICE.lock().unwrap();
-    let device = device.as_ref().ok_or(Error::NotFound)?;
-    
-    let any_device = device.as_any();
-    if let Some(page_table) = any_device.downcast_ref::<dyn WithPageTable>() {
-        page_table.pa_to_va(pa)
+    let system = get_system::<dyn WithAddressTranslation>();
+    if let Some(system) = system {
+        system.pa_to_va(pa)
     } else {
-        Err(Error::NotSupported)
+        log::error!("pgtable_pa_to_va: system does not implement WithAddressTranslation");
+        Err(Error::NotFound)
     }
 }
 

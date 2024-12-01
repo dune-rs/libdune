@@ -46,6 +46,7 @@ pub struct VmplPercpu {
     in_usermode: u64,
     pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
+    ghcb: *mut Ghcb,
     vcpu_fd: BaseDevice,
     xsave_area: XSaveArea,
     system: Arc<dyn WithInterrupt>,
@@ -73,6 +74,7 @@ impl VmplPercpu {
     funcs!(kfs_base, u64);
     funcs!(ufs_base, u64);
     funcs!(in_usermode, u64);
+    funcs!(ghcb, *mut Ghcb);
     funcs!(vcpu_fd, BaseDevice);
     funcs_vec!(gdt, u64);
 
@@ -81,6 +83,7 @@ impl VmplPercpu {
         self.set_kfs_base(fs_base)
             .set_ufs_base(fs_base)
             .set_in_usermode(1)
+            .set_ghcb(ptr::null_mut())
             .setup_safe_stack()?;
         Ok(())
     }
@@ -616,35 +619,39 @@ impl WithPageTable for VmplSystem {
 impl WithGHCB for VmplPercpu {
 
     fn ghcb(&self) -> VirtAddr {
-        VirtAddr::new(0)
+        VirtAddr::from_ptr(self.ghcb)
     }
 
     fn set_ghcb(&mut self, va: VirtAddr) {
-        todo!()
+        self.ghcb = va.as_ptr();
     }
 
+    // TODO: 需要线性映射GHCB物理页，这样就可以直接查询GHCB物理地址
     fn get_ghcb(&self) -> Option<PhysAddr>  {
         log::info!("get GHCB");
         let vcpu_fd = self.vcpu_fd.fd();
         let mut ghcb: u64 = 0;
-        let ret = unsafe {vmpl_get_ghcb(vcpu_fd, &mut ghcb).map_err(|e| {
+        
+        let ret = unsafe { 
+            vmpl_get_ghcb(vcpu_fd, &mut ghcb).map_err(|e| {
                 log::error!("dune: failed to get GHCB");
                 Error::LibcError(e)
-        })};
-        // convert to option
-        if let Err(_) = ret {
-            return None;
+            })
+        };
+
+        match ret {
+            Ok(_) => Some(PhysAddr::new(ghcb)),
+            Err(_) => None
         }
-        // return ghcb as PhysAddr
-        Some(PhysAddr::new(ghcb))
     }
 
     fn map_ghcb(&mut self) -> Option<*mut Ghcb> {
         log::info!("map GHCB");
         let vcpu_fd = self.fd();
+        
         let ghcb = unsafe {
             mmap(
-                GHCB_MMAP_BASE.as_ptr::<u64>() as *mut libc::c_void,
+                GHCB_MMAP_BASE.as_mut_ptr(),
                 PAGE_SIZE,
                 PROT_READ | PROT_WRITE,
                 MAP_SHARED | MAP_FIXED | MAP_POPULATE,
@@ -654,13 +661,12 @@ impl WithGHCB for VmplPercpu {
         };
 
         if ghcb == MAP_FAILED {
-            eprintln!("dune: failed to map GHCB");
+            log::error!("dune: failed to map GHCB");
             return None;
         }
 
-        let ghcb = ghcb as *mut Ghcb;
-        
-        Some(ghcb)
+        let ghcb_ptr = ghcb as *mut Ghcb;
+        Some(ghcb_ptr)
     }
 }
 

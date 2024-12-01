@@ -10,6 +10,7 @@ use std::ptr;
  */
 
 use crate::core::Percpu;
+use crate::vc::{vc_inb, vc_outb};
 
 const TTYS0: u16 = 0x3f8;
 const DIV_BASE: u32 = 115200;
@@ -25,18 +26,6 @@ const DLM: u16 = 1;
 
 static PORT: u16 = TTYS0;
 static SERIAL_READY: AtomicBool = AtomicBool::new(false);
-
-fn vc_outb(port: u16, value: u8) {
-    unsafe {
-        ptr::write_volatile(port as *mut u8, value);
-    }
-}
-
-fn vc_inb(port: u16) -> u8 {
-    unsafe {
-        ptr::read_volatile(port as *mut u8)
-    }
-}
 
 pub fn serial_out(string: &str) {
     if !SERIAL_READY.load(Ordering::SeqCst) {
@@ -84,7 +73,7 @@ pub fn serial_init() {
 }
 
 #[cfg(feature = "serial")]
-pub trait WithSerial : Percpu {
+pub trait WithSerial : Percpu + WithVC {
     fn serial_out(&self, string: &str) {
         serial_out(string);
     }

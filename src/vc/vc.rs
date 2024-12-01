@@ -552,31 +552,33 @@ fn vc_establish_protocol() -> u64 {
     response
 }
 
-thread_local! {
-    static THIS_GHCB: std::cell::RefCell<Option<*mut Ghcb>> = std::cell::RefCell::new(None);
-}
-
-fn get_mut_ghcb() -> Option<&'static mut Ghcb> {
-    THIS_GHCB.with(|ghcb_ref| {
-        // 获取并解引用 Option<*mut Ghcb>，然后返回可变引用
-        if let Some(ptr) = *ghcb_ref.borrow_mut() {
-            unsafe { Some(&mut *ptr) }
-        } else {
-            None
-        }
-    })
-}
-
 fn get_early_ghcb() -> Option<&'static mut Ghcb> {
-    get_mut_ghcb()
+    let percpu = get_percpu::<dyn WithGHCB>();
+    if let Some(percpu) = percpu {
+        unsafe { Some(&mut *percpu.ghcb().as_mut_ptr()) }
+    } else {
+        log::error!("get_early_ghcb: percpu does not implement WithGHCB");
+        None
+    }
 }
 
 fn vc_get_ghcb() -> Option<&'static mut Ghcb> {
-    get_mut_ghcb()
+    let percpu = get_percpu::<dyn WithGHCB>();
+    if let Some(percpu) = percpu {
+        unsafe { Some(&mut *percpu.ghcb().as_mut_ptr()) }
+    } else {
+        log::error!("vc_get_ghcb: percpu does not implement WithGHCB");
+        None
+    }
 }
 
 fn vc_set_ghcb(ghcb: *mut Ghcb) {
-    THIS_GHCB.with(|this_ghcb| *this_ghcb.borrow_mut() = Some(ghcb));
+    let percpu = get_percpu::<dyn WithGHCB>();
+    if let Some(percpu) = percpu {
+        percpu.set_ghcb(VirtAddr::from_ptr(ghcb));
+    } else {
+        log::error!("vc_set_ghcb: percpu does not implement WithGHCB");
+    }
 }
 
 fn vc_perform_vmgexit(ghcb: &mut Ghcb, code: u64, info1: u64, info2: u64) {
@@ -907,7 +909,7 @@ pub trait WithVC : WithGHCB {
 
         println!("setup VC");
 
-        let ghcb_pa = pgtable_va_to_pa(VirtAddr::from_ptr(ghcb_va));
+        let ghcb_pa = pgtable_va_to_pa(ghcb_va)?;
         println!("ghcb_pa: {:x}", ghcb_pa);
 
         vc_establish_protocol();
@@ -922,7 +924,7 @@ pub trait WithVC : WithGHCB {
         let ghcb_va = self.ghcb();
         self.set_ghcb(VirtAddr::new(0));
 
-        let pte: &mut PageTableEntry = pgtable_lookup(ghcb_va);
+        let pte: &mut PageTableEntry = pgtable_lookup(ghcb_va)?;
 
         let ghcb_pa = pte.addr();
         let value = sev_es_rd_ghcb_msr();
