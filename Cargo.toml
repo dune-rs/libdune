@@ -5,7 +5,7 @@ edition = "2021"
 build = "build.rs"
 
 [features]
-default = ["dune", "signal", "debug", "syscall", "vmpl", "vc"]
+default = ["dune", "signal", "debug", "syscall", "vmpl", "vc", "apic", "serial", "page_size_1k"]
 test = []
 signal = []
 syscall = ["pgtable"]

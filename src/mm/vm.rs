@@ -34,6 +34,13 @@ pub const VA_END: VirtAddr = VirtAddr::new(u64::MAX);
 
 pub const VSYSCALL_ADDR: usize = 0xffffffffff600000;
 
+pub const VMPL_VA_START: u64 = option_env!("VMPL_VA_START")
+    .map(|s| s.parse().unwrap())
+    .unwrap_or(0x3fffff000000);
+pub const VMPL_VA_SIZE: usize = option_env!("VMPL_VA_SIZE")
+    .map(|s| s.parse().unwrap())
+    .unwrap_or(0x20000000);
+
 #[repr(C)]
 #[derive(Debug,Copy,Clone,PartialEq,Eq)]
 pub enum CreateType {
@@ -685,10 +692,8 @@ pub trait WithVmplMemory : WithPageTable {
         self.page_init()?;
 
         // VMPL-VM Abstraction
-        let va_start: u64 = 0x3fffff000000;
-        let va_size: usize = 0x20000000;
         let vmpl_vm = self.get_vmpl_vm();
-        vmpl_vm.init(va_start, va_size).map_err(|e| Error::Unknown)?;
+        vmpl_vm.init(VMPL_VA_START, VMPL_VA_SIZE).map_err(|e| Error::Unknown)?;
 
         // VMPL Page Table Management
         self.pgtable_init()?;
