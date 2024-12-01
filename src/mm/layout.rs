@@ -1,8 +1,11 @@
 use x86_64::{VirtAddr, PhysAddr};
 use dune_sys::result::{Result, Error};
 use dune_sys::{GPA_STACK_SIZE, GPA_MAP_SIZE, DuneLayout, VmplLayout};
-use crate::mm::AddressMapping;
 
+pub trait AddressMapping {
+    fn va_to_pa(&self, ptr: VirtAddr) -> Result<PhysAddr> where Self: Sized;
+    fn pa_to_va(&self, ptr: PhysAddr) -> Result<VirtAddr> where Self: Sized;
+}
 // 分段线性映射虚拟页
 impl AddressMapping for DuneLayout {
 

@@ -19,6 +19,7 @@ use lazy_static::lazy_static;
 use crate::{dune_flush_tlb, dune_flush_tlb_one, globals::*, DuneProcmapEntry, ProcMapType};
 use crate::mm::*;
 use dune_sys::result::{Result, Error};
+use crate::mm::layout::AddressMapping;
 // use std::ptr;
 
 // i << (12 + 9 * i)
@@ -194,11 +195,6 @@ impl From<Permissions> for CreateType {
             CreateType::Normal
         }
     }
-}
-
-pub trait AddressMapping {
-    fn va_to_pa(&self, ptr: VirtAddr) -> Result<PhysAddr> where Self: Sized;
-    fn pa_to_va(&self, ptr: PhysAddr) -> Result<VirtAddr> where Self: Sized;
 }
 
 #[derive(Debug, Clone, Copy)]
