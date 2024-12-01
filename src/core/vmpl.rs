@@ -41,14 +41,28 @@ use dune_sys::VmplLayout;
 pub struct VmplPercpu {
     percpu_ptr: u64,
     tmp: u64,
-    kfs_base: VirtAddr,
-    ufs_base: VirtAddr,
+    kfs_base: u64,
+    ufs_base: u64,
     in_usermode: u64,
     pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
     vcpu_fd: BaseDevice,
     xsave_area: XSaveArea,
-    system: Arc<VmplSystem>,
+    system: Arc<dyn WithInterrupt>,
+}
+
+/*
+ * Supervisor Private Area Format
+ */
+#[cfg(feature = "vmpl")]
+pub mod offsets {
+    use std::mem::offset_of;
+
+    pub const TMP : usize = offset_of!(DunePercpu, tmp);
+    pub const KFS_BASE: usize = offset_of!(DunePercpu, kfs_base);
+    pub const UFS_BASE: usize = offset_of!(DunePercpu, ufs_base);
+    pub const IN_USERMODE: usize = offset_of!(DunePercpu, in_usermode);
+    pub const TRAP_STACK: usize = offset_of!(DunePercpu, tss.tss_rsp);
 }
 
 use crate::__dune_syscall;
@@ -56,49 +70,19 @@ use crate::__dune_syscall;
 impl VmplPercpu {
     funcs!(percpu_ptr, u64);
     funcs!(tmp, u64);
-    funcs!(kfs_base, VirtAddr);
-    funcs!(ufs_base, VirtAddr);
+    funcs!(kfs_base, u64);
+    funcs!(ufs_base, u64);
     funcs!(in_usermode, u64);
     funcs!(vcpu_fd, BaseDevice);
     funcs_vec!(gdt, u64);
 
-    #[allow(dead_code)]
-    pub fn alloc() -> Option<&'static mut VmplPercpu> {
-        let percpu = unsafe {
-            mmap(
-                std::ptr::null_mut(),
-                PGSIZE as usize,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-
-        if percpu == libc::MAP_FAILED {
-            return None;
-        }
-
-        let percpu_ptr = percpu as *mut VmplPercpu;
-        let percpu = unsafe {&mut *percpu_ptr};
-
-        let fsbase = FsBase::read();
-        percpu.set_kfs_base(fsbase)
-            .set_ufs_base(fsbase)
-            .set_in_usermode(1);
-
-        if let Err(_) = percpu.setup_safe_stack() {
-            log::error!("dune: failed to setup safe stack");
-            Self::free(percpu_ptr);
-            return None;
-        }
-
-        Some(percpu)
-    }
-
-    pub fn free(percpu: *mut VmplPercpu) {
-        log::debug!("vmpl_free_percpu");
-        unsafe { munmap(percpu as *mut c_void, PGSIZE as usize) };
+    fn prepare(&mut self) -> Result<()> {
+        let fs_base = get_fs_base()?;
+        self.set_kfs_base(fs_base)
+            .set_ufs_base(fs_base)
+            .set_in_usermode(1)
+            .setup_safe_stack()?;
+        Ok(())
     }
 
     fn set_config(&self, data: &mut VcpuConfig) -> Result<i32> {
@@ -153,6 +137,7 @@ impl VmplPercpu {
 
     fn vmpl_init_pre(&mut self) -> Result<()> {
         log::info!("vmpl_init_pre");
+
         // Setup CPU set for the thread
         self.setup_cpuset()?;
 
@@ -214,8 +199,6 @@ impl VmplPercpu {
 
         Ok(())
     }
-
-
 }
 
 impl Device for VmplPercpu {
@@ -239,62 +222,37 @@ impl Device for VmplPercpu {
 
 impl Percpu for VmplPercpu {
 
-    type SystemType = VmplSystem;
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }  
 
     fn prepare(&mut self) -> Result<()> {
         // Implement the prepare function
         todo!()
     }
 
-    fn setup_safe_stack(&mut self) -> Result<()> {
-
-        log::info!("setup safe stack");
-
-        let safe_stack = Self::map_safe_stack()?;
-        self.tss.set_tss_iomb(std::mem::size_of::<Tss>() as u16);
-
-        for i in 0..7 {
-            self.tss.set_tss_ist(i, safe_stack as u64);
-        }
-
-        self.tss.tss_rsp[0] = safe_stack as u64;
-
-        Ok(())
-    }
-
-    fn gdtr(&self) -> Tptr {
-        // Implement the gdtr function
-        let mut gdtr = Tptr::default();
-        let gdt = &self.gdt;
-        let gdt_ptr = gdt.as_ptr();
-        let size = gdt.len() * mem::size_of::<u64>() - 1;
-        gdtr.set_base(gdt_ptr as u64)
-            .set_limit(size as u16);
-        gdtr
-    }
-
-    fn idtr(&mut self) -> Tptr {
-        // Implement the idtr function
-        log::info!("idtr");
-        let idt = self.system().get_idt();
-        let mut idtr = Tptr::default();
-        idtr.set_base(idt.as_ptr().addr() as u64)
-            .set_limit((idt.len() * mem::size_of::<IdtDescriptor>() - 1) as u16);
-        idtr
-    }
-
-    fn system(&self) -> &Arc<Self::SystemType> {
+    fn system(&self) -> &Arc<dyn WithInterrupt> {
         &self.system
     }
 
-    fn set_system(&mut self, system: &Arc<Self::SystemType>) {
+    fn set_system(&mut self, system: &Arc<dyn WithInterrupt>) {
         self.system = Arc::clone(system);
     }
 
-    fn dune_boot(&mut self) -> Result<()> {
-        // Implement the dune_boot function
-        todo!()
+    fn get_gdt(&mut self) -> &mut [u64; NR_GDT_ENTRIES] {
+        &mut self.gdt
+    }
+
+    fn get_tss(&self) -> &Tss {
+        &self.tss
+    }
+
+    fn get_tss_mut(&mut self) -> &mut Tss {
+        &mut self.tss
     }
 
     fn do_dune_enter(&mut self) -> Result<()> {
@@ -314,15 +272,6 @@ impl Percpu for VmplPercpu {
     fn dune_enter_ex(&mut self) -> Result<()> {
         // Implement the dune_enter_exit function
         todo!()
-    }
-
-    fn setup_gdt(&mut self) {
-        log::info!("setup gdt");
-        let gdt = &mut self.gdt;
-        let tss = &self.tss;
-        gdt.copy_from_slice(&GDT_TEMPLATE);
-        gdt[GD_TSS >> 3] = SEG_TSSA | SEG_P | SEG_A | SEG_BASELO!(tss) | SEG_LIM!(mem::size_of::<Tss>() as u64 - 1);
-        gdt[GD_TSS2 >> 3] = SEG_BASEHI!(tss);
     }
 }
 
@@ -491,14 +440,39 @@ impl DuneRoutine for VmplSystem {
         let data = &mut VcpuConfig::default();
         let vcpu_fd = self.create_vcpu(data)?;
 
-        let percpu: *mut VmplPercpu = VmplPercpu::create()?;
-        let percpu = unsafe { &mut *percpu };
-        percpu.set_vcpu_fd(*BaseDevice::new().set_fd(vcpu_fd));
-        percpu.do_dune_enter()?;
+        // Check if this process already entered Dune before a fork...
+        let percpu = get_percpu::<VmplPercpu>();
+        if let Some(percpu) = percpu {
+            // enter Dune mode directly        
+            percpu.do_dune_enter()?;
+            return Ok(());
+        }
 
-        self.vmpl_init_test();
-        self.vmpl_init_banner();
-        self.vmpl_init_stats();
+        // Create a new PerCPU
+        let percpu: *mut VmplPercpu = VmplPercpu::create(Arc::new(self));
+        percpu.and_then(|percpu_ptr| {
+            let percpu = unsafe { &mut *percpu_ptr };
+            percpu.set_vcpu_fd(*BaseDevice::new().set_fd(vcpu_fd));
+            percpu.prepare().map_err(|e| {
+                log::error!("dune: failed to prepare percpu");
+                VmplPercpu::free(percpu_ptr);
+                e
+            })?;
+            percpu.do_dune_enter().map_err(|e| {
+                log::error!("dune: failed to enter Dune mode");
+                VmplPercpu::free(percpu_ptr);
+            })?;
+
+            set_percpu(percpu);
+
+            self.vmpl_init_test();
+            self.vmpl_init_banner();
+            self.vmpl_init_stats();
+        }).map_err(|e| {
+            log::error!("dune: failed to create percpu");
+            e
+        })?;
+
 
         Ok(())
     }
@@ -654,8 +628,8 @@ impl WithGHCB for VmplPercpu {
         let vcpu_fd = self.vcpu_fd.fd();
         let mut ghcb: u64 = 0;
         let ret = unsafe {vmpl_get_ghcb(vcpu_fd, &mut ghcb).map_err(|e| {
-            log::error!("dune: failed to get GHCB");
-            Error::LibcError(e)
+                log::error!("dune: failed to get GHCB");
+                Error::LibcError(e)
         })};
         // convert to option
         if let Err(_) = ret {
@@ -685,7 +659,7 @@ impl WithGHCB for VmplPercpu {
         }
 
         let ghcb = ghcb as *mut Ghcb;
-
+        
         Some(ghcb)
     }
 }

@@ -1,17 +1,19 @@
 use std::ffi::{c_int, c_void};
 use std::sync::Mutex;
-use std::cell::RefCell;
 use lazy_static::lazy_static;
 use libc::EXIT_SUCCESS;
 use nix::errno::Errno;
 use core::arch::global_asm;
 use dune_sys::{DuneConfig, *};
 use crate::core::*;
+use crate::core::percpu::{get_percpu, set_percpu};
 use dune_sys::result::Result;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::Path;
 use std::any::Any;
+use std::sync::Arc;
+use std::mem::offset_of;
 
 extern "C" {
     pub fn arch_prctl(code: c_int, addr: *mut c_void) -> c_int;
@@ -32,12 +34,17 @@ extern "C" {
     pub static __dune_vsyscall_page: u64;
 }
 
+#[cfg(feature = "dune")]
+use crate::core::dune::offsets::*;
+#[cfg(feature = "vmpl")]
+use crate::core::vmpl::offsets::*;
+
 global_asm!(
     include_str!("dune.S"),
     options(att_syntax),
     TMP = const TMP,
-    KFS_BASE = const KFS_BASE,
-    UFS_BASE = const UFS_BASE,
+    KFS_BASE = const KFS_BASE,  // 使用 offset
+    UFS_BASE = const UFS_BASE,  // 使用 offset
     IN_USERMODE = const IN_USERMODE,
     TRAP_STACK = const TRAP_STACK,
     IOCTL_DUNE_ENTER = const IOCTL_DUNE_ENTER,
@@ -71,10 +78,6 @@ global_asm!(
     __NR_time = const libc::SYS_time,
     __NR_getcpu = const libc::SYS_getcpu,
 );
-
-thread_local! {
-    pub static LPERCPU: RefCell<Option<DunePercpu>> = RefCell::new(None);
-}
 
 pub trait DuneRoutine : Any + Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;

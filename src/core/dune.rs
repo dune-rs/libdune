@@ -27,29 +27,34 @@ use super::DuneSignal;
 pub struct DunePercpu {
     percpu_ptr: u64,
     tmp: u64,
-    kfs_base: VirtAddr,
-    ufs_base: VirtAddr,
+    kfs_base: u64,
+    ufs_base: u64,
     in_usermode: u64,
     pub tss: Tss,
     gdt: [u64; NR_GDT_ENTRIES],
     vcpu_fd: BaseDevice,
-    system: Arc<DuneSystem>,
+    system: Arc<dyn WithInterrupt>,
 }
 
 /*
  * Supervisor Private Area Format
  */
-pub const TMP : usize = offset_of!(DunePercpu, tmp);
-pub const KFS_BASE: usize = offset_of!(DunePercpu, kfs_base);
-pub const UFS_BASE: usize = offset_of!(DunePercpu, ufs_base);
-pub const IN_USERMODE: usize = offset_of!(DunePercpu, in_usermode);
-pub const TRAP_STACK: usize = offset_of!(DunePercpu, tss.tss_rsp);
+#[cfg(feature = "dune")]
+pub mod offsets {
+    use std::mem::offset_of;
+
+    pub const TMP : usize = offset_of!(DunePercpu, tmp);
+    pub const KFS_BASE: usize = offset_of!(DunePercpu, kfs_base);
+    pub const UFS_BASE: usize = offset_of!(DunePercpu, ufs_base);
+    pub const IN_USERMODE: usize = offset_of!(DunePercpu, in_usermode);
+    pub const TRAP_STACK: usize = offset_of!(DunePercpu, tss.tss_rsp);
+}
 
 impl DunePercpu {
     funcs!(percpu_ptr, u64);
     funcs!(tmp, u64);
-    funcs!(kfs_base, VirtAddr);
-    funcs!(ufs_base, VirtAddr);
+    funcs!(kfs_base, u64);
+    funcs!(ufs_base, u64);
     funcs!(in_usermode, u64);
     funcs!(vcpu_fd, BaseDevice);
     funcs_vec!(gdt, u64);
@@ -100,55 +105,32 @@ impl Device for DunePercpu {
 
 impl Percpu for DunePercpu {
 
-    type SystemType = DuneSystem;
-
-    fn setup_gdt(&mut self) {
-        let gdt = &mut self.gdt;
-        let tss = &self.tss;
-        gdt.copy_from_slice(&GDT_TEMPLATE);
-        gdt[GD_TSS >> 3] = SEG_TSSA | SEG_P | SEG_A | SEG_BASELO!(tss) | SEG_LIM!(mem::size_of::<Tss>() as u64 - 1);
-        gdt[GD_TSS2 >> 3] = SEG_BASEHI!(tss);
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
-    fn gdtr(&self) -> Tptr {
-        let mut gdtr = Tptr::default();
-        unsafe {
-            let gdt_ptr = std::ptr::addr_of!(self.gdt);
-            let size = (*gdt_ptr).len() * mem::size_of::<u64>() - 1;
-            gdtr.set_base(gdt_ptr as u64)
-                .set_limit(size as u16);
-        }
-        gdtr
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
-    fn idtr(&mut self) -> Tptr {
-        let idt = self.system().get_idt();
-        let mut idtr = Tptr::default();
-        idtr.set_base(idt.as_ptr() as u64)
-            .set_limit((idt.len() * mem::size_of::<IdtDescriptor>() - 1) as u16);
-        idtr
+    fn system(&self) -> &Arc<dyn WithInterrupt> {
+        &self.system
     }
 
-    fn system(&self) -> &Arc<Self::SystemType> {
-        todo!()
+    fn set_system(&mut self, system: &Arc<dyn WithInterrupt>) {
+        self.system = Arc::clone(system);
     }
 
-    fn set_system(&mut self, system: &Arc<Self::SystemType>) {
-        todo!()
+    fn get_gdt(&mut self) -> &mut [u64; NR_GDT_ENTRIES] {
+        &mut self.gdt
     }
 
-    fn setup_safe_stack(&mut self) -> Result<()> {
-        let safe_stack: *mut c_void = Self::map_safe_stack()?;
-        self.tss.set_tss_iomb(TSS_IOPB as u16);
+    fn get_tss(&self) -> &Tss {
+        &self.tss
+    }
 
-        for idx in 1..8 {
-            // self.tss.tss_ist[i] = safe_stack as u64;
-            self.tss.set_tss_ist(idx, safe_stack as u64);
-        }
-
-        self.tss.tss_rsp[0] = safe_stack as u64;
-
-        Ok(())
+    fn get_tss_mut(&mut self) -> &mut Tss {
+        &mut self.tss
     }
 
     fn prepare(&mut self) -> Result<()> {
@@ -157,55 +139,6 @@ impl Percpu for DunePercpu {
             .set_ufs_base(fs_base)
             .set_in_usermode(0)
             .setup_safe_stack()?;
-        Ok(())
-    }
-
-    fn dune_boot(&mut self) -> Result<()> {
-        self.setup_gdt();
-        let gdtr = self.gdtr();
-        let idtr = self.idtr();
-
-        unsafe {
-            asm!(
-                // STEP 1: load the new GDT
-                "lgdt ({0})",
-
-                // STEP 2: initialize data segments
-                "mov {1:x}, %ax",
-                "mov %ax, %ds",
-                "mov %ax, %es",
-                "mov %ax, %ss",
-
-                // STEP 3: long jump into the new code segment
-                "mov {2:r}, %rax",
-                "pushq %rax",
-                "leaq 2f(%rip), %rax",
-                "pushq %rax",
-                "lretq",
-                "2:",
-                "nop",
-
-                // STEP 4: load the task register (for safe stack switching)
-                "mov {3:x}, %ax",
-                "ltr %ax",
-
-                // STEP 5: load the new IDT and enable interrupts
-                "lidt ({4})",
-                "sti",
-
-                in(reg) &gdtr,
-                in(reg) GD_KD,
-                in(reg) GD_KT,
-                in(reg) GD_TSS,
-                in(reg) &idtr,
-                options(nostack, preserves_flags, att_syntax)
-            );
-        }
-
-        // STEP 6: FS and GS require special initialization on 64-bit
-        FsBase::write(self.kfs_base);
-        GsBase::write(VirtAddr::new(self as *const _ as u64));
-
         Ok(())
     }
 
@@ -235,19 +168,20 @@ impl Percpu for DunePercpu {
             e
         })
     }
-
-    fn dune_enter_ex(&mut self) -> Result<()> {
-        self.prepare()?;
-        self.do_dune_enter()
-    }
 }
 
 pub fn dune_get_user_fs() -> u64 {
-    DunePercpu::get_user_fs()
+    if let Some(percpu) = get_percpu::<DunePercpu>() {
+        percpu.get_user_fs()
+    } else {
+        0
+    }
 }
 
 pub fn dune_set_user_fs(fs_base: u64) {
-    DunePercpu::set_user_fs(fs_base)
+    if let Some(percpu) = get_percpu::<DunePercpu>() {
+        percpu.set_user_fs(fs_base);
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -329,41 +263,35 @@ impl DuneRoutine for DuneSystem {
     }
 
     fn dune_enter(&mut self) -> Result<()> {
-        let system = Arc::new(*self);
         // Check if this process already entered Dune before a fork...
-        LPERCPU.with(|lpercpu| {
-            let mut lpercpu = lpercpu.borrow_mut();
+        let percpu = get_percpu::<DunePercpu>();
+        if let Some(percpu) = percpu {
             // if not none, enter Dune mode
-            match lpercpu.as_mut() {
-                Some(percpu) => {
-                    percpu.do_dune_enter()
-                },
-                None => {
-                    let percpu = DunePercpu::create();
-                    percpu.and_then(|percpu_ptr| {
-                        let percpu = unsafe { &mut *percpu_ptr };
-                        self.map_ptr(VirtAddr::from_ptr(percpu_ptr), mem::size_of::<DunePercpu>())?;
-                        match percpu.prepare() {
-                            Ok(()) => {
-                                percpu.set_system(&system);
-                                Ok(percpu)
-                            },
-                            Err(e) => {
-                                DunePercpu::free(percpu_ptr);
-                                Err(e)
-                            },
-                        }
-                    }).and_then(|percpu| {
-                        // map the stack into the Dune address space
-                        let _ = self.map_stack();
-                        percpu.do_dune_enter().map_err(|e|{
-                            DunePercpu::free(percpu);
-                            e
-                        })
-                    })
-                },
-            }
-        })
+            log::debug!("dune: already entered Dune mode");
+            return percpu.do_dune_enter();
+        }
+
+        let percpu = DunePercpu::create(Arc::new(self))?;
+        percpu.and_then(|percpu_ptr| {
+            let percpu = unsafe { &mut *percpu_ptr };
+            self.map_ptr(VirtAddr::from_ptr(percpu_ptr), mem::size_of::<DunePercpu>())?;
+            percpu.prepare().map_err(|e| {
+                log::error!("dune: failed to prepare percpu");
+                DunePercpu::free(percpu_ptr);
+                e
+            })?;
+            let _ = self.map_stack();
+            percpu.do_dune_enter().map_err(|e| {
+                log::error!("dune: failed to enter Dune mode");
+                DunePercpu::free(percpu_ptr);
+                e
+            })?;
+            set_percpu(percpu);
+            Ok(())
+        }).map_err(|e| {
+            log::error!("dune: failed to create percpu");
+            e
+        })?;
     }
 
     fn on_dune_exit(&mut self, conf_: *mut DuneConfig) -> ! {
