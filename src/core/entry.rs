@@ -90,13 +90,19 @@ lazy_static! {
 }
 
 pub fn get_system<T: 'static>() -> Option<&'static mut T> {
-    DEVICE.lock().unwrap().as_mut().and_then(|device| {
+    let device = DEVICE.lock().unwrap();
+    if let Some(device) = device.as_mut() {
         device.as_any().downcast_mut::<T>()
-    })
+    } else {
+        None
+    }
 }
 
-pub fn set_system(system: Box<dyn DuneRoutine>) {
-    *DEVICE.lock().unwrap() = Some(system);
+pub fn set_system<T: 'static>(system: Box<T>) {
+    let mut device = DEVICE.lock().unwrap();
+    if let Some(device) = device.as_mut() {
+        *device = Some(system);
+    }
 }
 
 fn check_cpu_features() -> Result<()> {
@@ -123,10 +129,10 @@ fn check_cpu_features() -> Result<()> {
     }
 
     if has_vmx {
-        *DEVICE.lock().unwrap() = Some(Box::new(DuneSystem::new()));
+        set_system(Box::new(DuneSystem::new()));
         Ok(())
     } else if has_sev_snp {
-        *DEVICE.lock().unwrap() = Some(Box::new(VmplSystem::new()));
+        set_system(Box::new(VmplSystem::new()));
         Ok(())
     } else {
         Err(Error::LibcError(Errno::ENOTSUP))
