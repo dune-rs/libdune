@@ -141,7 +141,8 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
         return libc::EXIT_FAILURE;
     }
 
-    if let Some(ref mut device) = *DEVICE.lock().unwrap() {
+    let device = get_system::<dyn DuneRoutine>();
+    device.and_then(|device| {
         match device.dune_init(map_full) {
             Ok(_) => 0,
             Err(e) => {
@@ -149,9 +150,7 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
                 libc::EXIT_FAILURE
             }
         }
-    } else {
-        libc::EXIT_FAILURE
-    }
+    }).unwrap_or(libc::EXIT_FAILURE)
 }
 
 /**
@@ -166,14 +165,16 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
  */
 #[no_mangle]
 pub extern "C" fn dune_enter() -> c_int {
-    let mut device = DEVICE.lock().unwrap();
-    match device.as_mut().unwrap().dune_enter() {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            log::error!("dune_enter() {}", e);
-            libc::EXIT_FAILURE
-        },
-    }
+    let mut device = get_system::<dyn DuneRoutine>();
+    device.and_then(|device| {
+        match device.dune_enter() {
+            Ok(_) => 0,
+            Err(e) => {
+                log::error!("dune_enter() {}", e);
+                libc::EXIT_FAILURE
+            }
+        }
+    }).unwrap_or(libc::EXIT_FAILURE)
 }
 
 /**
@@ -187,12 +188,16 @@ pub extern "C" fn dune_enter() -> c_int {
  */
 #[no_mangle]
 pub extern "C" fn dune_init_and_enter() -> c_int {
-    let ret= dune_init(true);
-    if ret != 0 {
-        return ret;
-    }
-
-	return dune_enter();
+    let device = get_system::<dyn DuneRoutine>();
+    device.and_then(|device| {
+        match device.dune_init(true) {
+            Ok(_) => dune_enter(),
+            Err(e) => {
+                log::error!("dune_init_and_enter() {}", e);
+                libc::EXIT_FAILURE
+            }
+        }
+    }).unwrap_or(libc::EXIT_FAILURE)
 }
 
 /**
@@ -203,6 +208,8 @@ pub extern "C" fn dune_init_and_enter() -> c_int {
  */
 #[no_mangle]
 pub unsafe extern "C" fn on_dune_exit(conf: *mut DuneConfig) -> ! {
-    let mut device = DEVICE.lock().unwrap();
-    device.as_mut().unwrap().on_dune_exit(conf);
+    let device = get_system::<dyn DuneRoutine>();
+    device.and_then(|device| {
+        device.on_dune_exit(conf)
+    });
 }
