@@ -7,8 +7,11 @@ use libc::{MAP_FAILED,MAP_SHARED,MAP_FIXED,MAP_POPULATE};
 use x86_64::VirtAddr;
 use x86_64::PhysAddr;
 use x86_64::registers::model_specific::FsBase;
+use x86_64::structures::paging::PageTable;
+use dune_sys::PGTABLE_MMAP_BASE;
 use dune_sys::vmpl_get_layout;
 use dune_sys::vmpl_get_config;
+use dune_sys::vmpl_get_cr3;
 use dune_sys::vmpl_get_ghcb;
 use dune_sys::vmpl_get_pages;
 use dune_sys::GetPages;
@@ -381,6 +384,8 @@ impl VmplSystem {
 
     fn vmpl_init_test(&self) {
         log::info!("vmpl_init_test");
+        #[cfg(test)]
+        self.pgtable_test();
     }
 
     fn vmpl_init_banner(&self) {
@@ -543,7 +548,7 @@ impl WithPageManager for VmplSystem {
         Arc::clone(&self.page_manager)
     }
 
-    fn get_pages(&self, num_pages: u64) -> Result<PhysAddr> {
+    fn get_pages(&self, num_pages: usize) -> Result<PhysAddr> {
         let fd = self.fd();
         let mut args = GetPages::default();
         args.set_num_pages(num_pages);
@@ -591,15 +596,45 @@ impl WithVmplFpu for VmplPercpu {
     }
 }
 
-impl WithPageTable for VmplPercpu {
+impl WithPageTable for VmplSystem {
 
-    fn pgtable_pa_to_va(&self, pa: PhysAddr) -> VirtAddr {
-        // request parent to lookup pgtable
-        todo!()
+    fn get_cr3(&self) -> Option<PhysAddr> {
+        unsafe {
+            let mut cr3: u64 =  0;
+            let ret = vmpl_get_cr3(self.fd(), &mut cr3).map_err(|e| {
+                log::error!("dune: failed to get CR3");
+                Error::LibcError(e)
+            }).unwrap();
+            if ret < 0 {
+                return None;
+            }
+            Some(PhysAddr::new(cr3))
+        }
     }
 
-    fn pgtable_va_to_pa(&self, va: VirtAddr) -> PhysAddr {
-        // request parent to lookup pgtable
+    fn do_mapping(&self, phys: PhysAddr, len: usize) -> Result<*mut PageTable> {
+        let fd = self.fd();
+        let addr = unsafe {
+            mmap(
+                (PGTABLE_MMAP_BASE + phys.as_u64()) as *mut _,
+                len,
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED | MAP_POPULATE,
+                fd,
+                phys.as_u64() as i64,
+            )
+        };
+
+        if addr == MAP_FAILED {
+            return Err(Error::MappingFailed);
+        }
+
+        mark_vmpl_pages(phys, len);
+
+        Ok(addr as *mut PageTable)
+    }
+
+    fn get_page_table(&self) -> Result<&mut PageTable> {
         todo!()
     }
 }

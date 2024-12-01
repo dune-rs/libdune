@@ -314,7 +314,7 @@ impl DuneRoutine for DuneSystem {
     fn dune_init(&mut self, map_full: bool) -> Result<()> {
         self.open("/dev/dune\0")?;
         // Initialize the Dune VM
-        dune_vm_init()?;
+        // dune_vm_init(0)?;
 
         #[cfg(feature = "apic")]
         self.apic_setup()?;

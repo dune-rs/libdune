@@ -403,7 +403,7 @@ impl VmaMap {
 }
 
 #[derive(Debug)]
-struct VmplVm {
+pub struct VmplVm {
     vma_map: Mutex<VmaMap>,
     va_start: u64,
     va_end: u64,
@@ -582,7 +582,7 @@ fn associate_pkey_callback(vma: &Vma, pkey: &u64) {
 
 impl VmplVm {
     #[allow(dead_code)]
-    fn init(&mut self, va_start: u64, va_size: usize) -> Result<(), io::Error> {
+    pub fn init(&mut self, va_start: u64, va_size: usize) -> Result<(), io::Error> {
         let va_end = va_start + va_size as u64;
 
         // VMPL Preserve Kernel Mapping
@@ -604,7 +604,7 @@ impl VmplVm {
     }
 
     #[allow(dead_code)]
-    fn init_procmaps(&self) -> Result<(), io::Error> {
+    pub fn init_procmaps(&self) -> Result<(), io::Error> {
         // Touch each VMA in the VMA dictionary
         parse_procmaps(touch_vma_callback)?;
 
@@ -622,14 +622,14 @@ impl VmplVm {
     }
 
     #[allow(dead_code)]
-    fn exit(&self) {
+    pub fn exit(&self) {
         // VMPL VMA Management
         let mut vma_map = self.vma_map.lock().unwrap();
         vma_map.clear();
     }
 
     #[allow(dead_code)]
-    fn dump(&self) {
+    pub fn dump(&self) {
         let vma_map = self.vma_map.lock().unwrap();
         for vma in vma_map.values() {
             if let Some(vm_file) = &vma.vm_file {
@@ -641,7 +641,7 @@ impl VmplVm {
     }
 
     #[allow(dead_code)]
-    fn print(&self) {
+    pub fn print(&self) {
         println!("VMPL-VM:");
         println!("va_start = 0x{:x}, va_end = 0x{:x}", self.va_start, self.va_end);
         let vma_map = self.vma_map.lock().unwrap();
@@ -655,7 +655,7 @@ impl VmplVm {
     }
 
     #[allow(dead_code)]
-    fn stats(&self) {
+    pub fn stats(&self) {
         println!("VMPL-VM Stats:");
         let vma_map = self.vma_map.lock().unwrap();
         println!("vma_map count = {}", vma_map.len());

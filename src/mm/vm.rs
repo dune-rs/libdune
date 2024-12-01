@@ -13,6 +13,7 @@ use lazy_static::lazy_static;
 use crate::{dune_flush_tlb, dune_flush_tlb_one, globals::*, DuneProcmapEntry, ProcMapType};
 use crate::mm::*;
 use dune_sys::result::{Result, Error};
+// use std::ptr;
 
 // i << (12 + 9 * i)
 macro_rules! PDADDR {
@@ -99,7 +100,7 @@ fn pte_big1gb(pte: &PageTableEntry) -> bool {
 
 fn alloc_page() -> Option<PhysAddr> {
 
-    let pg = dune_page_alloc();
+    let pg = dune_page_alloc(0);
     if let Ok(pg) = pg {
         let pa = dune_page2pa(pg);
         return Some(pa);
@@ -640,8 +641,152 @@ lazy_static! {
     pub static ref DUNE_VM : Mutex<DuneVm> = Mutex::new(DuneVm::new());
 }
 
-pub fn dune_vm_init() -> Result<()> {
-    dune_page_init()?;
+pub fn dune_vm_init(fd: i32) -> Result<()> {
+    dune_page_init(fd)?;
     lazy_static::initialize(&DUNE_VM);
+    Ok(())
+}
+
+pub struct VmplMm {
+    root: *mut PageTable,
+    page_manager: PageManager,
+    vmpl_vm: VmplVm,
+    initialized: bool,
+    lock: Mutex<()>,
+}
+
+impl VmplMm {
+    pub fn new() -> Self {
+        VmplMm {
+            root: ptr::null_mut(),
+            page_manager: PageManager::new(),
+            vmpl_vm: VmplVm::default(),
+            initialized: false,
+            lock: Mutex::new(()),
+        }
+    }
+
+    pub fn init(&mut self) -> Result<()> {
+        let _guard = self.lock.lock().unwrap();
+
+        if self.initialized {
+            return Ok(());
+        }
+
+        // VMPL Page Management
+        self.page_manager.page_init(0);
+
+        // VMPL-VM Abstraction
+        let va_start: u64 = 0x3fffff000000;
+        let va_size: usize = 0x20000000;
+        self.vmpl_vm = VmplVm::default();
+        self.vmpl_vm.init(va_start, va_size).map_err(|e| Error::Unknown)?;
+
+        // VMPL Page Table Management
+        // pgtable_init(&mut self.pgd, dune_fd)?;
+
+        // VMPL Memory Management
+        self.vmpl_vm.init_procmaps()?;
+
+        self.initialized = true;
+        Ok(())
+    }
+
+    pub fn exit(&mut self) -> Result<()> {
+        self.vmpl_vm.exit();
+        // pgtable_exit(self.pgd)?;
+        self.page_manager.page_exit();
+        Ok(())
+    }
+
+    pub fn stats(&self) {
+        println!("VMPL Memory Management Stats:");
+        self.page_manager.page_stats();
+        // pgtable_stats(self.pgd);
+        self.vmpl_vm.stats();
+    }
+
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mmap() {
+        let mut vmpl_mm = VmplMm::new();
+        vmpl_mm.init().unwrap();
+
+        // Test mmap
+        let va = VirtAddr::new(0x1000);
+        let len = 0x1000;
+        let perm = Permissions::R | Permissions::W;
+        let mmap_args = MmapArgs::new(va, len, perm);
+        mmap_args.map(&vmpl_mm).unwrap();
+
+        // Test page table entry lookup
+        let root = vmpl_mm.get_root();
+        let pte = DuneVm::lookup(root, va, CreateType::None).unwrap();
+        assert!(pte_present(pte));
+        assert_eq!(pte.flags(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+
+        // Test access to the mapped page
+        unsafe {
+            let ptr = va.as_u64() as *mut u64;
+            ptr::write(ptr, 0xdeadbeef);
+            assert_eq!(ptr::read(ptr), 0xdeadbeef);
+        }
+
+        // Test mprotect
+        DuneVm::mprotect(root, va, len, Permissions::R).unwrap();
+        let pte = DuneVm::lookup(root, va, CreateType::None).unwrap();
+        assert_eq!(pte.flags(), PageTableFlags::PRESENT);
+
+        // Test munmap
+        DuneVm::unmap(root, va, len).unwrap();
+        let result = DuneVm::lookup(root, va, CreateType::None);
+        assert!(result.is_err());
+
+        vmpl_mm.exit().unwrap();
+    }
+
+    #[test]
+    fn test_vmpl_mm() {
+        let mut vmpl_mm = VmplMm::new();
+        vmpl_mm.init().unwrap();
+
+        // Test VMPL-MM
+        println!("VMPL-MM Test");
+        // page_test(dune_fd);
+        // pgtable_test(vmpl_mm.pgd, vmpl_mm.pgd as u64);
+        // vmpl_vm_test(&vmpl_mm.vmpl_vm);
+        test_mmap(&vmpl_mm);
+        println!("VMPL-MM Test Passed");
+
+        vmpl_mm.exit().unwrap();
+    }
+}
+
+use libc::mlockall;
+use libc::MCL_CURRENT;
+use libc::MCL_FUTURE;
+use libc::MCL_ONFAULT;
+
+pub fn setup_mm() -> Result<()> {
+    log::info!("setup mm");
+
+    let ret = unsafe {mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)};
+    if ret < 0 {
+        log::error!("mlockall failed");
+        return Err(Error::LibcError(Errno::ENOMEM));
+    }
+
+    let mut vmpl_mm = VmplMm::new();
+    vmpl_mm.init().map_err(|e| {
+        log::error!("dune: unable to setup vmpl mm");
+        e
+    })?;
+
     Ok(())
 }
