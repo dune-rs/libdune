@@ -21,7 +21,8 @@ pub const SYSTEM_RAM: u64 = 0x480000000;
 pub const PAGEBASE: PhysAddr = PhysAddr::new(0x0);
 pub const PAGE_SHIFT: u64 = 12;
 pub const MAX_PAGES: usize = (SYSTEM_RAM >> PAGE_SHIFT) as usize;
-pub const PAGE_FLAG_MAPPED: u32 = 0x1;
+pub const PAGE_FLAG_MAPPED: u64 = 0x1;
+pub const PAGE_FLAG_VMPL: u64 = 0x2;
 pub const PGSIZE: usize = 1 << PAGE_SHIFT;
 pub const PAGE_SIZE: usize = 4096;
 
@@ -39,8 +40,7 @@ const CONFIG_DUNE_PAGE_GROW_SIZE: usize =
 pub struct Page {
     link: Option<Box<Page>>,
     ref_count: u64,
-    flags: u32,
-    vmpl: u64,
+    flags: u64,
 }
 
 unsafe impl Send for Page {}
@@ -50,22 +50,73 @@ unsafe impl Sync for Page {}
 impl Page {
 
     funcs!(ref_count, u64);
-    funcs!(flags, u32);
-    funcs!(vmpl, u64);
+    funcs!(flags, u64);
 
     fn new() -> Self {
         Page {
             link: None,
             ref_count: 0,
             flags: 0,
-            vmpl: 0,
         }
     }
+
+    pub fn is_mapped(&self) -> bool {
+        self.flags & PAGE_FLAG_MAPPED != 0
+    }
+
+    pub fn is_vmpl(&self) -> bool {
+        self.flags & PAGE_FLAG_VMPL != 0
+    }
+
+    pub fn set_mapped(&mut self) {
+        self.flags |= PAGE_FLAG_MAPPED;
+    }
+
+    pub fn set_vmpl(&mut self) {
+        self.flags |= PAGE_FLAG_VMPL;
+    }
+
+    pub fn clear_mapped(&mut self) {
+        self.flags &= !PAGE_FLAG_MAPPED;
+    }
+
+    pub fn clear_vmpl(&mut self) {
+        self.flags &= !PAGE_FLAG_VMPL;
+    }
+}
+
+trait VmplPageManager {
+    fn vmpl_page_init(&mut self) -> Result<()>;
+    fn vmpl_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>>;
+    fn vmpl_page_free(&mut self, pg: Arc<Mutex<Page>>);
+    fn vmpl_page_is_from_pool(&self, pa: PhysAddr) -> bool;
+    fn vmpl_page_is_mapped(&self, pa: PhysAddr) -> bool;
+    fn vmpl_page_get(&self, pg: &Arc<Mutex<Page>>);
+    fn vmpl_page_put(&mut self, pg: Arc<Mutex<Page>>);
+    fn vmpl_pa2page(&self, pa: PhysAddr) -> Arc<Mutex<Page>>;
+    fn vmpl_page2pa(&self, pg: Arc<Mutex<Page>>) -> PhysAddr;
+    fn vmpl_grow_pages(&mut self) -> Result<()>;
+    fn vmpl_page_stats(&self);
+}
+
+trait DunePageManager {
+    fn dune_page_init(&mut self) -> Result<()>;
+    fn dune_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>>;
+    fn dune_page_free(&mut self, pg: Arc<Mutex<Page>>);
+    fn dune_page_is_from_pool(&self, pa: PhysAddr) -> bool;
+    fn dune_page_is_mapped(&self, pa: PhysAddr) -> bool;
+    fn dune_page_get(&self, pg: &Arc<Mutex<Page>>);
+    fn dune_page_put(&mut self, pg: Arc<Mutex<Page>>);
+    fn dune_pa2page(&self, pa: PhysAddr) -> Arc<Mutex<Page>>;
+    fn dune_page2pa(&self, pg: Arc<Mutex<Page>>) -> PhysAddr;
+    fn dune_grow_pages(&mut self) -> Result<()>;
+    fn dune_page_stats(&self);
 }
 
 #[derive(Debug, Clone)]
 pub struct PageManager {
     fd: RawFd,
+    pagebase: PhysAddr,
     pages: Vec<Page>,
     num_dune_pages: usize,
     num_vmpl_pages: usize,
@@ -76,10 +127,24 @@ pub struct PageManager {
 impl PageManager {
 
     funcs!(fd, RawFd);
+    funcs!(pagebase, PhysAddr);
 
     pub fn new(fd: RawFd) -> Self {
         PageManager {
             fd,
+            pagebase: PAGEBASE,
+            pages: Vec::with_capacity(MAX_PAGES),
+            num_dune_pages: 0,
+            num_vmpl_pages: 0,
+            vmpl_pages_free: Mutex::new(LinkedList::new()),
+            dune_pages_free: Mutex::new(LinkedList::new()),
+        }
+    }
+
+    pub fn with_pagebase(fd: RawFd, pagebase: PhysAddr) -> Self {
+        PageManager {
+            fd,
+            pagebase,
             pages: Vec::with_capacity(MAX_PAGES),
             num_dune_pages: 0,
             num_vmpl_pages: 0,
@@ -91,7 +156,7 @@ impl PageManager {
     fn do_mapping(&self, phys: u64, len: usize) -> *mut c_void {
         let addr = unsafe {
             libc::mmap(
-                (PAGEBASE.as_u64() + phys) as *mut c_void,
+                (self.pagebase.as_u64() + phys) as *mut c_void,
                 len,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED | libc::MAP_POPULATE,
@@ -107,7 +172,7 @@ impl PageManager {
 
         for i in (0..len).step_by(PGSIZE) {
             let pg = self.vmpl_pa2page(PhysAddr::new(phys + i as u64));
-            unsafe { (*pg.lock().unwrap()).flags = PAGE_FLAG_MAPPED };
+            pg.lock().unwrap().set_mapped();
         }
 
         addr
@@ -127,7 +192,7 @@ impl PageManager {
 
         let mut head_guard = head.lock().unwrap();
         for pg in (begin..end).step_by(1) {
-            unsafe { (*pg.lock().unwrap()).vmpl = 1 };
+            pg.lock().unwrap().set_vmpl();
             head_guard.push_front(Arc::new(Mutex::new(unsafe { *pg.lock().unwrap() })));
         }
 
@@ -143,6 +208,9 @@ impl PageManager {
 
         Ok(())
     }
+}
+
+impl VmplPageManager for PageManager {
 
     fn vmpl_grow_pages(&mut self) -> Result<()> {
         let num_pages = CONFIG_VMPL_PAGE_GROW_SIZE;
@@ -159,7 +227,7 @@ impl PageManager {
         Ok(())
     }
 
-    pub fn vmpl_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>> {
+    fn vmpl_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>> {
         let mut head_guard = self.vmpl_pages_free.lock().unwrap();
         if head_guard.is_empty() {
             drop(head_guard);
@@ -175,7 +243,7 @@ impl PageManager {
         Some(pg)
     }
 
-    pub fn vmpl_page_free(&mut self, pg: Arc<Mutex<Page>>) {
+    fn vmpl_page_free(&mut self, pg: Arc<Mutex<Page>>) {
         let mut head_guard = self.vmpl_pages_free.lock().unwrap();
         head_guard.push_front(pg);
         self.num_vmpl_pages += 1;
@@ -184,32 +252,33 @@ impl PageManager {
     fn vmpl_page_stats(&self) {
         println!("VMPL Pages Stats:");
         println!("VMPL Pages: {}/{}", self.num_vmpl_pages, MAX_PAGES);
+        println!("VMPL Pages Free: {}", self.vmpl_pages_free.lock().unwrap().len());
     }
 
-    pub fn vmpl_page_is_from_pool(&self, pa: PhysAddr) -> bool {
-        if pa.as_u64() < PAGEBASE.as_u64() {
+    fn vmpl_page_is_from_pool(&self, pa: PhysAddr) -> bool {
+        if pa < self.pagebase {
             return false;
         }
 
         let pg = self.vmpl_pa2page(pa);
-        unsafe { let x = (*pg.lock().unwrap()).vmpl == 1; x }
+        pg.lock().unwrap().is_vmpl()
     }
 
-    pub fn vmpl_page_is_mapped(&self, pa: PhysAddr) -> bool {
-        if pa.as_u64() < PAGEBASE.as_u64() {
+    fn vmpl_page_is_mapped(&self, pa: PhysAddr) -> bool {
+        if pa < self.pagebase {
             return false;
         }
 
         let pg = self.vmpl_pa2page(pa);
-        unsafe { let x = (*pg.lock().unwrap()).flags == PAGE_FLAG_MAPPED; x }
+        pg.lock().unwrap().is_mapped()
     }
 
-    pub fn vmpl_page_get(&self, pg: &Arc<Mutex<Page>>) {
+    fn vmpl_page_get(&self, pg: &Arc<Mutex<Page>>) {
         let mut pg_guard = pg.lock().unwrap();
         pg_guard.ref_count += 1;
     }
 
-    pub fn vmpl_page_put(&mut self, pg: Arc<Mutex<Page>>) {
+    fn vmpl_page_put(&mut self, pg: Arc<Mutex<Page>>) {
         let mut pg_guard = pg.lock().unwrap();
         pg_guard.ref_count -= 1;
         if pg_guard.ref_count == 0 {
@@ -218,20 +287,24 @@ impl PageManager {
         }
     }
 
-    pub fn vmpl_pa2page(&self, pa: PhysAddr) -> Arc<Mutex<Page>> {
-        assert!(pa >= PAGEBASE);
-        assert!(pa < PAGEBASE + (MAX_PAGES << PAGE_SHIFT) as u64);
-        let pg_ptr = self.pages.as_ptr().wrapping_add((pa.as_u64() - PAGEBASE.as_u64()) as usize >> PAGE_SHIFT) as *mut Page;
+    fn vmpl_pa2page(&self, pa: PhysAddr) -> Arc<Mutex<Page>> {
+        assert!(pa >= self.pagebase);
+        assert!(pa < self.pagebase + (MAX_PAGES << PAGE_SHIFT) as u64);
+        let pg_ptr = self.pages.as_ptr().wrapping_add(
+            (pa.as_u64() - self.pagebase.as_u64()) as usize >> PAGE_SHIFT
+        ) as *mut Page;
         Arc::new(Mutex::new(unsafe { (*pg_ptr).clone() }))
     }
 
-    pub fn vmpl_page2pa(&self, pg: Arc<Mutex<Page>>) -> PhysAddr {
+    fn vmpl_page2pa(&self, pg: Arc<Mutex<Page>>) -> PhysAddr {
         let pg_guard = pg.lock().unwrap();
         let pg_ptr = &*pg_guard as *const Page as usize;
         let pg_index = (pg_ptr - self.pages.as_ptr() as usize) / std::mem::size_of::<Page>();
-        PAGEBASE + (pg_index << PAGE_SHIFT) as u64
+        self.pagebase + (pg_index << PAGE_SHIFT) as u64
     }
+}
 
+impl DunePageManager for PageManager {
     fn dune_grow_pages(&mut self) -> Result<()> {
         let num_pages = CONFIG_DUNE_PAGE_GROW_SIZE;
         self.grow_pages(&self.dune_pages_free, num_pages, true)?;
@@ -246,7 +319,7 @@ impl PageManager {
         Ok(())
     }
 
-    pub fn dune_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>> {
+    fn dune_page_alloc(&mut self) -> Option<Arc<Mutex<Page>>> {
         let mut head_guard = self.dune_pages_free.lock().unwrap();
         if head_guard.is_empty() {
             drop(head_guard);
@@ -262,7 +335,7 @@ impl PageManager {
         Some(pg)
     }
 
-    pub fn dune_page_free(&mut self, pg: Arc<Mutex<Page>>) {
+    fn dune_page_free(&mut self, pg: Arc<Mutex<Page>>) {
         let mut head_guard = self.dune_pages_free.lock().unwrap();
         head_guard.push_front(pg);
         self.num_dune_pages += 1;
@@ -271,24 +344,35 @@ impl PageManager {
     fn dune_page_stats(&self) {
         println!("Dune Pages Stats:");
         println!("Dune Pages: {}/{}", self.num_dune_pages, MAX_PAGES);
+        println!("Dune Pages Free: {}", self.dune_pages_free.lock().unwrap().len());
     }
 
-    pub fn dune_page2pa(&self, pg: Arc<Mutex<Page>>) -> PhysAddr {
+    fn dune_page2pa(&self, pg: Arc<Mutex<Page>>) -> PhysAddr {
         self.vmpl_page2pa(pg)
     }
 
-    pub fn dune_pa2page(&self, pa: PhysAddr) -> Arc<Mutex<Page>> {
+    fn dune_pa2page(&self, pa: PhysAddr) -> Arc<Mutex<Page>> {
         self.vmpl_pa2page(pa)
     }
 
-    pub fn dune_page_get(&self, pg: &Arc<Mutex<Page>>) {
+    fn dune_page_get(&self, pg: &Arc<Mutex<Page>>) {
         self.vmpl_page_get(pg)
     }
 
-    pub fn dune_page_put(&mut self, pg: Arc<Mutex<Page>>) {
+    fn dune_page_put(&mut self, pg: Arc<Mutex<Page>>) {
         self.vmpl_page_put(pg)
     }
 
+    fn dune_page_is_from_pool(&self, pa: PhysAddr) -> bool {
+        self.vmpl_page_is_from_pool(pa)
+    }
+
+    fn dune_page_is_mapped(&self, pa: PhysAddr) -> bool {
+        self.vmpl_page_is_mapped(pa)
+    }
+}
+
+impl PageManager {
 
     pub fn page_init(&mut self) -> Result<()> {
         // 申请MAX_PAGES个Page结构体
@@ -330,88 +414,85 @@ impl PageManager {
             self.mark_page_mapped(phys + i as u64);
         }
     }
+
+    pub fn mark_vmpl_page(&self, pa: PhysAddr) {
+        self.mark_page_mapped(pa);
+    }
+
+    pub fn mark_vmpl_pages(&self, phys: PhysAddr, len: usize) {
+        self.mark_pages_mapped(phys, len);
+    }
 }
 
-
-lazy_static! {
-    pub static ref PAGE_MANAGER: Arc<Mutex<PageManager>> = {
-        Arc::new(Mutex::new(PageManager::new(-1)))
+// 定义统一的宏来生成全局 helper 函数
+macro_rules! define_page_helpers {
+    ($(($name:ident, $ret:ty, $fn_name:ident $(, $arg:ident: $type:ty)*)),* $(,)?) => {
+        $(
+            #[no_mangle]
+            pub fn $name($($arg: $type),*) -> $ret {
+                let system = get_system::<dyn WithPageManager>();
+                if let Some(system) = system {
+                    let pm = system.page_manager().lock().unwrap();
+                    pm.$fn_name($($arg),*)
+                } else {
+                    log::error!(concat!(stringify!($name), ": system does not implement WithPageManager"));
+                    panic!();
+                }
+            }
+        )*
     };
 }
 
-pub fn init_page_manager(fd: RawFd) -> Result<()> {
-    let mut pm = PAGE_MANAGER.lock().unwrap();
-    *pm = PageManager::new(fd);
-    pm.page_init()
-}
+// 使用新宏一次性定义所有helper函数
+define_page_helpers!(
+    // Dune page helpers
+    (dune_page_isfrompool, bool, page_is_from_pool, pa: PhysAddr),
+    (dune_page_ismapped, bool, page_is_mapped, pa: PhysAddr),
+    (dune_page_alloc, Result<Arc<Mutex<Page>>>, page_alloc),
+    (dune_page_init, Result<()>, page_init, fd: i32, pagebase: PhysAddr),
+    (dune_page_exit, (), page_exit),
+    (dune_page_free, (), page_free, pg: Arc<Mutex<Page>>),
+    (dune_page_get, (), page_get, pg: &Arc<Mutex<Page>>),
+    (dune_page_put, (), page_put, pg: Arc<Mutex<Page>>),
+    (dune_pa2page, Arc<Mutex<Page>>, pa2page, pa: PhysAddr),
+    (dune_page2pa, PhysAddr, page2pa, page: Arc<Mutex<Page>>),
+    (dune_page_stats, (), page_stats),
 
-#[no_mangle]
-pub fn dune_page_isfrompool(pa: PhysAddr) -> bool {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.vmpl_page_is_from_pool(pa)
-}
+    // VMPL page helpers
+    (vmpl_page_isfrompool, bool, page_is_from_pool, pa: PhysAddr),
+    (vmpl_page_ismapped, bool, page_is_mapped, pa: PhysAddr),
+    (vmpl_page_alloc, Result<Arc<Mutex<Page>>>, page_alloc),
+    (vmpl_page_init, Result<()>, page_init, fd: i32, pagebase: PhysAddr),
+    (vmpl_page_exit, (), page_exit),
+    (vmpl_page_free, (), page_free, pg: Arc<Mutex<Page>>),
+    (vmpl_page_get, (), page_get, pg: &Arc<Mutex<Page>>),
+    (vmpl_page_put, (), page_put, pg: Arc<Mutex<Page>>),
+    (vmpl_pa2page, Arc<Mutex<Page>>, pa2page, pa: PhysAddr),
+    (vmpl_page2pa, PhysAddr, page2pa, page: Arc<Mutex<Page>>),
+    (vmpl_page_stats, (), page_stats),
 
-#[no_mangle]
-pub fn dune_page_alloc() -> Result<Arc<Mutex<Page>>> {
-    let mut pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page_alloc().ok_or(Error::Unknown)
-}
+    // Mark page helpers
+    (mark_page_mapped, (), mark_page_mapped, pa: PhysAddr),
+    (mark_pages_mapped, (), mark_pages_mapped, phys: PhysAddr, len: usize),
+    (mark_vmpl_page, (), mark_page_mapped, pa: PhysAddr),
+    (mark_vmpl_pages, (), mark_pages_mapped, phys: PhysAddr, len: usize),
 
-#[no_mangle]
-pub fn dune_page_free(pg: Arc<Mutex<Page>>) {
-    let mut pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page_free(pg)
-}
+    // Page init helper
+    (page_init, Result<()>, page_init, fd: i32, pagebase: PhysAddr),
+);
 
-#[no_mangle]
-pub fn dune_page_get(pg: Arc<Mutex<Page>>) {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page_get(&pg)
-}
+pub trait WithPageManager {
 
-#[no_mangle]
-pub fn dune_page_put(pg: Arc<Mutex<Page>>) {
-    let mut pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page_put(pg)
-}
-
-#[no_mangle]
-pub fn dune_pa2page(pa: PhysAddr) -> Arc<Mutex<Page>> {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_pa2page(pa)
-}
-
-#[no_mangle]
-pub fn dune_page2pa(page: Arc<Mutex<Page>>) -> PhysAddr {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page2pa(page)
-}
-
-pub fn dune_page_init(fd: i32) -> Result<()> {
-    lazy_static::initialize(&PAGE_MANAGER);
-    init_page_manager(fd)
-}
-
-#[no_mangle]
-pub fn dune_page_stats() {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.dune_page_stats()
-}
-
-pub trait WithPageManager + Device {
-
-    // 获取页管理器的引用
     fn page_manager(&self) -> Arc<Mutex<PageManager>>;
 
     // 初始化页管理器
-    fn page_init(&self) -> Result<()> {
-        let mut pm = self.page_manager().lock().unwrap();
-        pm.set_fd(self.fd());
-        pm.page_init()
+    fn page_init(&self, fd: i32, pagebase: PhysAddr) -> Result<()> {
+        let pm = self.page_manager().lock().unwrap();
+        pm.page_init(fd, pagebase)
     }
 
     fn page_exit(&self) {
-        let mut pm = self.page_manager().lock().unwrap();
+        let pm = self.page_manager().lock().unwrap();
         pm.page_exit()
     }
 
@@ -504,16 +585,4 @@ mod tests {
         pm.dune_page_free(page);
         pm.page_stats();
     }
-}
-
-#[no_mangle]
-pub fn mark_vmpl_page(pa: PhysAddr) {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.mark_page_mapped(pa);
-}
-
-#[no_mangle] 
-pub fn mark_vmpl_pages(phys: PhysAddr, len: usize) {
-    let pm = PAGE_MANAGER.lock().unwrap();
-    pm.mark_pages_mapped(phys, len);
 }
