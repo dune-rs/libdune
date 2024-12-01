@@ -216,42 +216,55 @@ pub trait WithPageTable : WithPageManager + WithAddressTranslation {
     // 获取当前系统的页表
     fn get_page_table(&self) -> Result<&mut PageTable>;
 
-    fn pgtable_init(&self) -> Result<()> {
-        let paddr = self.get_cr3().unwrap();
-        let level = PageTableLevel::Four;
-        let mut queue = vec![(paddr, level)];
-        let mut pgtable_count = 0;
-        let mut page_count = 0;
+    // 递归遍历页表，并标记VMPL页面
+    unsafe fn walk_page_table(&self, paddr: PhysAddr, level: PageTableLevel) -> Result<()> {
+        // 如果是最底层页表，直接返回
+        if level == PageTableLevel::One {
+            return Ok(());
+        }
 
-        while let Some((paddr, level)) = queue.pop() {
-            unsafe {
-                mark_vmpl_page(paddr);
+        // 映射当前页表
+        let table: *mut PageTable = self.do_mapping(paddr, PAGE_SIZE)?;
+        
+        // 只遍历顶层页表的前256项
+        let max_entries = if level == PageTableLevel::Four { 256 } else { 512 };
+        let next_level = level.next_lower_level().unwrap();
 
-                if level != PageTableLevel::One {
-                    let root: *mut PageTable = self.do_mapping(paddr, PAGE_SIZE)?;
-                    // Only map the first 256 entries of the top-level page table
-                    let max_i = if level != PageTableLevel::Four { 512 } else { 256 };
-                    let next_level = level.next_lower_level().unwrap();
-                    for i in 0..max_i {
-                        let pte = &(*root)[i];
-                        if pte_present(pte) {
-                            // 如果是内存大页，不需要继续递归
-                            if pte_big(pte) || pte_big1gb(pte) {
-                                page_count += 1;
-                                continue;
-                            }
-                            queue.push((pte.addr(), next_level));
-                        }
-                    }
-
-                    pgtable_count = pgtable_count + 1;
+        // 遍历页表项
+        for i in 0..max_entries {
+            let pte = &(*table)[i];
+            if pte_present(pte) {
+                if pte_big(pte) || pte_big1gb(pte) {
+                    // 大页直接标记
+                    mark_vmpl_page(pte.addr());
                 } else {
-                    page_count = page_count + 1;
+                    // 递归遍历下一级页表
+                    self.walk_page_table(pte.addr(), next_level)?;
                 }
             }
         }
 
-        // *pgroot = Some(paddr);
+        Ok(())
+    }
+
+    fn pgtable_init(&self) -> Result<()> {
+        let paddr = self.get_cr3().unwrap();
+        self.mark_vmpl_page(paddr);
+        
+        // 递归遍历页表
+        unsafe {
+            self.walk_page_table(paddr, PageTableLevel::Four)?;
+        }
+        Ok(())
+    }
+
+    fn pgtable_exit(&self) -> Result<()> {
+        log::debug!("pgtable exit");
+        Ok(())
+    }
+
+    fn pgtable_free(&self) -> Result<()> {
+        log::debug!("pgtable free");
         Ok(())
     }
 
