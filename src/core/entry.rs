@@ -80,7 +80,6 @@ global_asm!(
 );
 
 pub trait DuneRoutine : Any + Send + Sync {
-    fn as_any(&self) -> &dyn std::any::Any;
     fn dune_init(&mut self, map_full: bool) -> Result<()>;
     fn dune_enter(&mut self) -> Result<()>;
     fn on_dune_exit(&mut self, conf: *mut DuneConfig) -> !;
@@ -88,6 +87,16 @@ pub trait DuneRoutine : Any + Send + Sync {
 
 lazy_static! {
     pub static ref DEVICE: Mutex<Option<Box<dyn DuneRoutine>>> = Mutex::new(None);
+}
+
+pub fn get_system<T: 'static>() -> Option<&'static mut T> {
+    DEVICE.lock().unwrap().as_mut().and_then(|device| {
+        device.as_any().downcast_mut::<T>()
+    })
+}
+
+pub fn set_system(system: Box<dyn DuneRoutine>) {
+    *DEVICE.lock().unwrap() = Some(system);
 }
 
 fn check_cpu_features() -> Result<()> {

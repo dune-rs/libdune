@@ -2,8 +2,10 @@
 #![feature(thread_local)]
 #![feature(ptr_mask)]
 #![feature(c_variadic)]
+#![feature(trait_upcasting)]
 #![allow(unused_macros)]
 #![allow(unused_variables)]
+#![allow(unused_comparisons)]
 #![allow(unused)]
 #[macro_use]
 pub mod globals;

@@ -140,15 +140,42 @@ fn pgtable_alloc() {
 }
 
 pub fn pgtable_lookup(va: VirtAddr) -> Result<&'static mut PageTableEntry> {
-    panic!("pgtable_lookup not implemented");
+    let device = DEVICE.lock().unwrap();
+    let device = device.as_ref().ok_or(Error::NotFound)?;
+    
+    // 先转换为 Any 类型
+    let any_device = device.as_any();
+    
+    // 尝试下转型为 WithPageTable
+    if let Some(page_table) = any_device.downcast_ref::<dyn WithPageTable>() {
+        page_table.pgtable_lookup(va)
+    } else {
+        Err(Error::NotSupported)
+    }
 }
 
-pub fn pgtable_va_to_pa(va: VirtAddr) -> PhysAddr {
-    panic!("pgtable_va_to_pa not implemented");
+pub fn pgtable_va_to_pa(va: VirtAddr) -> Result<PhysAddr> {
+    let device = DEVICE.lock().unwrap();
+    let device = device.as_ref().ok_or(Error::NotFound)?;
+    
+    let any_device = device.as_any();
+    if let Some(page_table) = any_device.downcast_ref::<dyn WithPageTable>() {
+        page_table.va_to_pa(va)
+    } else {
+        Err(Error::NotSupported)
+    }
 }
 
-pub fn pgtable_pa_to_va(pa: PhysAddr)  -> VirtAddr {
-    panic!("pgtable_pa_to_va not implemented");
+pub fn pgtable_pa_to_va(pa: PhysAddr) -> Result<VirtAddr> {
+    let device = DEVICE.lock().unwrap();
+    let device = device.as_ref().ok_or(Error::NotFound)?;
+    
+    let any_device = device.as_any();
+    if let Some(page_table) = any_device.downcast_ref::<dyn WithPageTable>() {
+        page_table.pa_to_va(pa)
+    } else {
+        Err(Error::NotSupported)
+    }
 }
 
 pub fn is_page_maped(pa: PhysAddr) -> bool {
