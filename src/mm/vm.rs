@@ -367,70 +367,56 @@ impl DuneVm {
         addr: VirtAddr,
         create: CreateType,
     ) -> Result<&mut PageTableEntry> {
-        let i = addr.p4_index(); // P4D
-        let j = addr.p3_index(); // PMD
-        let k = addr.p2_index(); // PD
-        let l = addr.p1_index(); // PT
-        let p4de = &mut root[i];
-
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
-        let mut __alloc_page = || -> Result<PhysAddr> {
-            alloc_page()
-                .map_or(Err(Error::LibcError(Errno::ENOMEM)), |phys_addr|{
-                // VA == PA
-                let addr = phys_addr.as_u64() as *mut PageTable;
-                // clear page
-                unsafe {ptr::write_bytes(addr, 0, PGSIZE as usize)};
-                Ok(phys_addr)
-            })
-        };
+        let mut table = root;
+        
+        // 遍历4级页表
+        for level in [
+            PageTableLevel::Four,
+            PageTableLevel::Three,
+            PageTableLevel::Two,
+            PageTableLevel::One,
+        ] {
+            let index = addr.page_table_index(level);
+            let entry = &mut table[index];
 
-        let pdpt = if !p4de.flags().contains(PageTableFlags::PRESENT) {
-            if create == CreateType::None {
-                return Err(Error::from(libc::ENOENT))
+            // 检查是否是大页(1GB或2MB)
+            if (level == PageTableLevel::Three && pte_big1gb(entry)) ||
+               (level == PageTableLevel::Two && pte_big(entry)) {
+                return Ok(entry);
             }
 
-            let phys_addr = __alloc_page()?;
-            p4de.set_addr(phys_addr, flags);
-            unsafe { &mut *(phys_addr.as_u64() as *mut PageTable) }
-        } else {
-            unsafe { &mut *(p4de.addr().as_u64() as *mut PageTable) }
-        };
+            // 如果不是最后一级且需要继续遍历
+            if level != PageTableLevel::One {
+                if !entry.flags().contains(PageTableFlags::PRESENT) {
+                    // 如果不存在且不允许创建,返回错误
+                    if create == CreateType::None {
+                        return Err(Error::LibcError(Errno::ENOENT));
+                    }
 
-        let pdpte = &mut pdpt[j];
-        let pd = if !pdpte.flags().contains(PageTableFlags::PRESENT) {
-            if create == CreateType::None {
-                return Err(Error::LibcError(Errno::ENOENT));
+                    // 分配新页表
+                    let phys_addr = alloc_page()
+                        .ok_or(Error::LibcError(Errno::ENOMEM))?;
+                    
+                    // 清零新页表
+                    unsafe {
+                        ptr::write_bytes(phys_addr.as_u64() as *mut u8, 0, PGSIZE as usize);
+                    }
+                    
+                    // 设置页表项
+                    entry.set_addr(phys_addr, flags);
+                }
+
+                // 获取下一级页表
+                table = unsafe { &mut *(entry.addr().as_u64() as *mut PageTable) };
+            } else {
+                // 最后一级,返回页表项
+                return Ok(entry);
             }
+        }
 
-            let phys_addr = __alloc_page()?;
-            pdpte.set_addr(phys_addr, flags);
-            unsafe { &mut *(phys_addr.as_u64() as *mut PageTable) }
-        } else if pte_big1gb(pdpte) {
-            return Ok(pdpte);
-        } else {
-            // VA == PA
-            unsafe { &mut *(pdpte.addr().as_u64() as *mut PageTable) }
-        };
-
-
-        let pde = &mut pd[k];
-        let pte = if !pte_present(pde) {
-            if create == CreateType::None {
-                return Err(Error::LibcError(Errno::ENOENT));
-            }
-
-            let phys_addr = __alloc_page()?;
-            pde.set_addr(phys_addr, flags);
-            unsafe { &mut *(phys_addr.as_u64() as *mut PageTable) }
-        } else if pte_big(&pde) {
-            return Ok(pde);
-        } else {
-            // VA == PA
-            unsafe { &mut *(pde.addr().as_u64() as *mut PageTable) }
-        };
-
-        Ok(&mut pte[l])
+        // 不应该到达这里
+        unreachable!("lookup should return before this point");
     }
 
     pub fn mprotect(
