@@ -182,20 +182,6 @@ pub fn is_page_maped(pa: PhysAddr) -> bool {
     unsafe { (*pg).flags() == PAGE_FLAG_MAPPED }
 }
 
-pub fn mark_vmpl_page(pa: PhysAddr) {
-    log::debug!("Marking page {:x} as mapped", pa);
-    let pg = dune_pa2page(pa);
-    unsafe { (*pg).set_flags(PAGE_FLAG_MAPPED) };
-}
-
-pub fn mark_vmpl_pages(phys: PhysAddr, len: usize) {
-    log::debug!("Marking page {:x}-{:x} as mapped", phys, phys + len as u64);
-    for i in (0..len).step_by(PAGE_SIZE) {
-        let pg = unsafe { dune_pa2page(phys + i as u64) };
-        unsafe { (*pg).set_flags(PAGE_FLAG_MAPPED) };
-    }
-}
-
 pub trait WithAddressTranslation {
 
     fn setup_address_translation(&mut self) -> Result<()>;
@@ -249,7 +235,7 @@ pub trait WithPageTable : WithPageManager + WithAddressTranslation {
 
     fn pgtable_init(&self) -> Result<()> {
         let paddr = self.get_cr3().unwrap();
-        self.mark_vmpl_page(paddr);
+        mark_vmpl_page(paddr);
         
         // 递归遍历页表
         unsafe {

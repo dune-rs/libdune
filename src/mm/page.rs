@@ -316,6 +316,20 @@ impl PageManager {
         self.vmpl_page_stats();
         self.dune_page_stats();
     }
+
+    pub fn mark_page_mapped(&self, pa: PhysAddr) {
+        log::debug!("Marking page {:x} as mapped", pa);
+        let pg = self.vmpl_pa2page(pa);
+        let mut pg_guard = pg.lock().unwrap();
+        pg_guard.flags = PAGE_FLAG_MAPPED;
+    }
+
+    pub fn mark_pages_mapped(&self, phys: PhysAddr, len: usize) {
+        log::debug!("Marking pages {:x}-{:x} as mapped", phys, phys + len as u64);
+        for i in (0..len).step_by(PAGE_SIZE) {
+            self.mark_page_mapped(phys + i as u64);
+        }
+    }
 }
 
 
@@ -490,4 +504,16 @@ mod tests {
         pm.dune_page_free(page);
         pm.page_stats();
     }
+}
+
+#[no_mangle]
+pub fn mark_vmpl_page(pa: PhysAddr) {
+    let pm = PAGE_MANAGER.lock().unwrap();
+    pm.mark_page_mapped(pa);
+}
+
+#[no_mangle] 
+pub fn mark_vmpl_pages(phys: PhysAddr, len: usize) {
+    let pm = PAGE_MANAGER.lock().unwrap();
+    pm.mark_pages_mapped(phys, len);
 }
