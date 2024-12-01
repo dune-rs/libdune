@@ -2,6 +2,12 @@ use std::sync::Mutex;
 use std::{default, ptr};
 use dune_sys::funcs;
 use libc::c_void;
+use libc::mlockall;
+use libc::MCL_CURRENT;
+use libc::MCL_FUTURE;
+use libc::MCL_ONFAULT;
+use libc::{getrlimit, rlimit, setrlimit, RLIMIT_DATA, RLIMIT_STACK};
+use log::{error, info};
 use nix::errno::Errno;
 use x86_64::structures::paging::page_table::PageTableLevel;
 use x86_64::structures::paging::PageTable;
@@ -665,49 +671,132 @@ impl VmplMm {
             lock: Mutex::new(()),
         }
     }
+}
 
-    pub fn init(&mut self) -> Result<()> {
-        let _guard = self.lock.lock().unwrap();
+// 需要提供page table，以初始化虚拟内存管理
+pub trait WithVmplMemory : WithPageTable {
 
-        if self.initialized {
-            return Ok(());
-        }
+    fn get_vmpl_vm(&self) -> &VmplVm;
+
+    fn setup_vm(&mut self) -> Result<()> {
+        log::info!("setup vm");
 
         // VMPL Page Management
-        self.page_manager.page_init(0);
+        self.page_init()?;
 
         // VMPL-VM Abstraction
         let va_start: u64 = 0x3fffff000000;
         let va_size: usize = 0x20000000;
-        self.vmpl_vm = VmplVm::default();
-        self.vmpl_vm.init(va_start, va_size).map_err(|e| Error::Unknown)?;
+        let vmpl_vm = self.get_vmpl_vm();
+        vmpl_vm.init(va_start, va_size).map_err(|e| Error::Unknown)?;
 
         // VMPL Page Table Management
-        // pgtable_init(&mut self.pgd, dune_fd)?;
+        self.pgtable_init()?;
 
         // VMPL Memory Management
-        self.vmpl_vm.init_procmaps()?;
-
-        self.initialized = true;
+        vmpl_vm.init_procmaps()?;
         Ok(())
     }
 
-    pub fn exit(&mut self) -> Result<()> {
-        self.vmpl_vm.exit();
-        // pgtable_exit(self.pgd)?;
-        self.page_manager.page_exit();
+    fn vm_exit(&mut self) -> Result<()> {
+        log::info!("tear down vm");
+
+        // Teardown VMPL-VM Abstraction
+        let vmpl_vm = self.get_vmpl_vm();
+        vmpl_vm.exit();
+
+        // Teardown VMPL Memory Management
+        self.pgtable_exit()?;
+
+        // Teardown VMPL Page Management
+        self.page_exit();
         Ok(())
     }
 
-    pub fn stats(&self) {
-        println!("VMPL Memory Management Stats:");
+    fn vm_free(&mut self) {
+        log::info!("vm free");
+
+        self.pgtable_free()?;
+    }
+
+    fn vm_stats(&self) {
+        log::info!("vm stats");
+
+        // Show VMPL Page Management Stats
         self.page_manager.page_stats();
-        // pgtable_stats(self.pgd);
-        self.vmpl_vm.stats();
-    }
 
+        // Show VMPL-VM Stats
+        let vmpl_vm = self.get_vmpl_vm();
+        vmpl_vm.stats();
+
+        // Show VMPL Page Table Stats
+        self.pgtable_stats();
+    }
 }
 
+
+// 需要提供fd，以初始化虚拟内存和物理内存管理
+pub trait WithVirtualMemory : WithVmplMemory {
+
+    fn setup_stack(stack_size: usize) -> Result<(), i32> {
+        info!("setup stack");
+
+        let mut rl: rlimit = unsafe { std::mem::zeroed() };
+        let rc = unsafe { getrlimit(RLIMIT_STACK, &mut rl) };
+        if rc != 0 {
+            error!("dune: failed to get stack size");
+            return Err(rc);
+        }
+
+        if rl.rlim_cur < stack_size as u64 {
+            rl.rlim_cur = stack_size as u64;
+            let rc = unsafe { setrlimit(RLIMIT_STACK, &rl) };
+            if rc != 0 {
+                error!("dune: failed to set stack size");
+                return Err(rc);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn setup_heap(increase_size: usize) -> Result<(), i32> {
+        info!("setup heap");
+
+        let mut rl: rlimit = unsafe { std::mem::zeroed() };
+        let rc = unsafe { getrlimit(RLIMIT_DATA, &mut rl) };
+        if rc != 0 {
+            error!("dune: failed to get heap size");
+            return Err(rc);
+        }
+
+        rl.rlim_cur += increase_size as u64;
+        let rc = unsafe { setrlimit(RLIMIT_DATA, &rl) };
+        if rc != 0 {
+            error!("dune: failed to set heap size");
+            return Err(rc);
+        }
+
+        Ok(())
+    }
+
+    fn setup_mm(&mut self) -> Result<()> {
+        log::info!("setup mm");
+
+        Self::setup_stack(&mut self);
+        Self::setup_heap();
+
+        let ret = unsafe {mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)};
+        if ret < 0 {
+            log::error!("mlockall failed");
+            return Err(Error::LibcError(Errno::ENOMEM));
+        }
+
+        self.setup_vm(dune_fd)?;
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -766,27 +855,4 @@ mod tests {
 
         vmpl_mm.exit().unwrap();
     }
-}
-
-use libc::mlockall;
-use libc::MCL_CURRENT;
-use libc::MCL_FUTURE;
-use libc::MCL_ONFAULT;
-
-pub fn setup_mm() -> Result<()> {
-    log::info!("setup mm");
-
-    let ret = unsafe {mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT)};
-    if ret < 0 {
-        log::error!("mlockall failed");
-        return Err(Error::LibcError(Errno::ENOMEM));
-    }
-
-    let mut vmpl_mm = VmplMm::new();
-    vmpl_mm.init().map_err(|e| {
-        log::error!("dune: unable to setup vmpl mm");
-        e
-    })?;
-
-    Ok(())
 }
