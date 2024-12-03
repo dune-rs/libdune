@@ -21,6 +21,7 @@ use crate::AddressMapping;
 use crate::WithAddressTranslation;
 use crate::globals::{GD_TSS, GD_TSS2, NR_GDT_ENTRIES, SEG_A, SEG_P, SEG_TSSA};
 use crate::{log_init, DuneDebug, DuneInterrupt, DuneSignal, DuneSyscall, WithVmplFpu, XSaveArea, PGSIZE};
+use crate::__dune_syscall;
 use crate::__dune_go_dune;
 use crate::{__dune_ret, __dune_enter};
 use crate::core::cpuset::WithCpuset;
@@ -66,8 +67,6 @@ pub mod offsets {
     pub const TRAP_STACK: usize = offset_of!(DunePercpu, tss.tss_rsp);
 }
 
-use crate::__dune_syscall;
-
 impl VmplPercpu {
     funcs!(percpu_ptr, u64);
     funcs!(tmp, u64);
@@ -77,16 +76,6 @@ impl VmplPercpu {
     funcs!(ghcb, *mut Ghcb);
     funcs!(vcpu_fd, BaseDevice);
     funcs_vec!(gdt, u64);
-
-    fn prepare(&mut self) -> Result<()> {
-        let fs_base = get_fs_base()?;
-        self.set_kfs_base(fs_base)
-            .set_ufs_base(fs_base)
-            .set_in_usermode(1)
-            .set_ghcb(ptr::null_mut())
-            .setup_safe_stack()?;
-        Ok(())
-    }
 
     fn set_config(&self, data: &mut VcpuConfig) -> Result<i32> {
         let fd = self.vcpu_fd.fd();
@@ -106,9 +95,9 @@ impl VmplPercpu {
         }
     }
 
-    fn setup_vmsa(&mut self) -> Result<()> {
+    fn setup_vcpu(&mut self) -> Result<()> {
         let mut data = Box::new(VcpuConfig::default());
-        log::info!("setup vmsa");
+        log::info!("setup vcpu");
 
         let fsbase = *VmsaSeg::new().set_base(self.kfs_base.as_u64());
         let gsbase = *VmsaSeg::new().set_base(self as *const _ as u64);
@@ -137,70 +126,12 @@ impl VmplPercpu {
         self.set_config(&mut data)?;
         Ok(())
     }
+}
 
-    fn vmpl_init_pre(&mut self) -> Result<()> {
-        log::info!("vmpl_init_pre");
+impl Display for VmplPercpu {
 
-        // Setup CPU set for the thread
-        self.setup_cpuset()?;
-
-        // Setup GDT for hypercall
-        self.setup_gdt();
-
-        // Setup segments registers
-        self.setup_vmsa()?;
-
-        // Setup XSAVE for FPU
-        self.xsave_begin();
-
-        Ok(())
-    }
-
-    fn dump_configs(&self) {
-        log::info!("dune: percpu_ptr={:x}", self.percpu_ptr);
-        log::info!("dune: kfs_base={:x}", self.kfs_base.as_u64());
-        log::info!("dune: ufs_base={:x}", self.ufs_base.as_u64());
-        log::info!("dune: in_usermode={}", self.in_usermode);
-    }
-
-    fn vmpl_init_post(&mut self) -> Result<()> {
-        // Now we are in VMPL mode
-        self.set_in_usermode(0);
-
-        // Setup XSAVE for FPU
-        self.xsave_end();
-
-        // Setup VC communication
-        #[cfg(feature = "vc")]
-        self.vc_init()?;
-
-        // Setup hotcall
-        #[cfg(feature = "hotcalls")]
-        self.hotcalls_enable()?;
-
-        // Setup serial port
-        #[cfg(feature = "serial")]
-        self.serial_init();
-
-        Ok(())
-    }
-
-    fn __do_dune_enter(&self) -> Result<()> {
-        let mut config = Box::new(DuneConfig::default());
-        log::info!("dune: entering Dune mode");
-
-        config.set_rip(__dune_ret as u64);
-        config.set_rsp(0);
-        config.set_rflags(0x202);
-
-        let vcpu_fd = self.vcpu_fd.fd();
-        let rc = unsafe { __dune_enter(vcpu_fd, &mut *config) };
-        if rc != 0 {
-            log::error!("dune: entry to Dune mode failed");
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "entry to Dune mode failed").into());
-        }
-
-        Ok(())
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "VmplPercpu {{ percpu_ptr: {:x}, kfs_base: {:x}, ufs_base: {:x}, in_usermode: {:x} }}", self.percpu_ptr, self.kfs_base.as_u64(), self.ufs_base.as_u64(), self.in_usermode)
     }
 }
 
@@ -233,48 +164,69 @@ impl Percpu for VmplPercpu {
         self
     }  
 
-    fn prepare(&mut self) -> Result<()> {
-        // Implement the prepare function
-        todo!()
-    }
+    fn init(&mut self) -> Result<()> {
+        log::info!("vmpl_init");
+        self.setup_safe_stack(&mut self.tss)?;
 
-    fn system(&self) -> &Arc<dyn WithInterrupt> {
-        &self.system
-    }
+        let fs_base = get_fs_base()?;
+        self.set_kfs_base(fs_base)
+            .set_ufs_base(fs_base)
+            .set_in_usermode(1)
+            .set_ghcb(ptr::null_mut());
 
-    fn set_system(&mut self, system: &Arc<dyn WithInterrupt>) {
-        self.system = Arc::clone(system);
-    }
+        // Setup CPU set for the thread
+        self.setup_cpuset()?;
 
-    fn get_gdt(&mut self) -> &mut [u64; NR_GDT_ENTRIES] {
-        &mut self.gdt
-    }
+        // Setup GDT for hypercall
+        self.setup_gdt(&mut self.gdt, &mut self.tss)?;
 
-    fn get_tss(&self) -> &Tss {
-        &self.tss
-    }
+        // Setup VCPU
+        self.setup_vcpu()?;
 
-    fn get_tss_mut(&mut self) -> &mut Tss {
-        &mut self.tss
-    }
-
-    fn do_dune_enter(&mut self) -> Result<()> {
-        self.vmpl_init_pre()?;
-
-        // Dump configs
-        self.dump_configs();
-
-        self.__do_dune_enter()?;
-
-        self.dune_boot()?;
-        self.vmpl_init_post()?;
+        // Setup XSAVE for FPU
+        self.xsave_begin();
 
         Ok(())
     }
 
-    fn dune_enter_ex(&mut self) -> Result<()> {
-        // Implement the dune_enter_exit function
-        todo!()
+    fn enter(&mut self) -> Result<()> {
+        let mut config = Box::new(DuneConfig::default());
+        log::info!("dune: entering Dune mode");
+
+        config.set_rip(__dune_ret as u64);
+        config.set_rsp(0);
+        config.set_rflags(0x202);
+
+        let vcpu_fd = self.vcpu_fd.fd();
+        let rc = unsafe { __dune_enter(vcpu_fd, &mut *config) };
+        if rc != 0 {
+            log::error!("dune: entry to Dune mode failed");
+            return Err(Error::Unknown);
+        }
+
+        Ok(())
+    }
+
+    fn boot(&mut self) -> Result<()> {
+        // Now we are in VMPL mode
+        self.set_in_usermode(0);
+
+        // Setup XSAVE for FPU
+        self.xsave_end();
+
+        // Setup VC communication
+        #[cfg(feature = "vc")]
+        self.vc_init()?;
+
+        // Setup hotcall
+        #[cfg(feature = "hotcalls")]
+        self.hotcalls_enable()?;
+
+        // Setup serial port
+        #[cfg(feature = "serial")]
+        self.serial_init();
+
+        Ok(())
     }
 }
 
@@ -303,7 +255,7 @@ impl VmplSystem {
         }
     }
 
-    fn setup_vm(&mut self) -> Result<i32> {
+    fn create_vm(&mut self) -> Result<i32> {
         self.open("/dev/vmpl\0")?;
 
         let vmpl_fd = self.fd();
@@ -323,50 +275,6 @@ impl VmplSystem {
         unsafe { vmpl_create_vcpu(dune_fd, data as *mut VcpuConfig).map_err(|e| {
             Error::LibcError(e)
         }) }
-    }
-
-    #[allow(dead_code)]
-    fn vmpl_init_exit(&self) {
-        log::info!("vmpl_init_exit");
-        // self.vmpl_mm_exit();
-        // self.apic_cleanup();
-    }
-
-    fn vmpl_init_stats(&self) {
-        log::info!("VMPL Stats:");
-        // self.vmpl_mm_stats();
-    }
-
-    fn vmpl_init_test(&self) {
-        log::info!("vmpl_init_test");
-        #[cfg(test)]
-        self.pgtable_test();
-    }
-
-    fn vmpl_init_banner(&self) {
-        log::info!("**********************************************");
-        log::info!("*                                            *");
-        log::info!("*              Welcome to VMPL!              *");
-        log::info!("*                                            *");
-        log::info!("**********************************************");
-    }
-
-    fn on_dune_syscall(&self, conf: &mut DuneConfig) {
-        conf.set_rax(unsafe {
-            libc::syscall(
-                conf.status() as libc::c_long,
-                conf.rdi(),
-                conf.rsi(),
-                conf.rdx(),
-                conf.r10(),
-                conf.r8(),
-                conf.r9(),
-            )
-        });
-
-        unsafe {
-            __dune_go_dune(self.fd(), conf as *mut DuneConfig)
-        };
     }
 
     /// 清除页表指针
@@ -441,7 +349,7 @@ impl DuneRoutine for VmplSystem {
         self
     }
 
-    fn dune_init(&mut self, map_full: bool) -> Result<()> {
+    fn init(&mut self, map_full: bool) -> Result<()> {
         log_init().map_err(|e| {
             log::error!("dune: failed to initialize logger");
             Error::Unknown
@@ -456,7 +364,7 @@ impl DuneRoutine for VmplSystem {
         self.setup_idt();
 
         self.setup_address_translation()?;
-        self.setup_vm()?;
+        self.create_vm()?;
         #[cfg(feature = "mm")]
         self.setup_mm()?;
         #[cfg(feature = "seimi")]
@@ -467,7 +375,7 @@ impl DuneRoutine for VmplSystem {
         Ok(())
     }
 
-    fn dune_enter(&mut self) -> Result<()> {
+    fn enter(&mut self) -> Result<()> {
         log::info!("vmpl_enter");
 
         let data = &mut VcpuConfig::default();
@@ -477,7 +385,7 @@ impl DuneRoutine for VmplSystem {
         let percpu = get_percpu::<VmplPercpu>();
         if let Some(percpu) = percpu {
             // enter Dune mode directly        
-            percpu.do_dune_enter()?;
+            percpu.enter()?;
             return Ok(());
         }
 
@@ -486,31 +394,66 @@ impl DuneRoutine for VmplSystem {
         percpu.and_then(|percpu_ptr| {
             let percpu = unsafe { &mut *percpu_ptr };
             percpu.set_vcpu_fd(*BaseDevice::new().set_fd(vcpu_fd));
-            percpu.prepare().map_err(|e| {
-                log::error!("dune: failed to prepare percpu");
+            percpu.init().map_err(|e| {
+                log::error!("dune: failed to init percpu");
                 VmplPercpu::free(percpu_ptr);
                 e
             })?;
-            percpu.do_dune_enter().map_err(|e| {
+            percpu.enter().map_err(|e| {
                 log::error!("dune: failed to enter Dune mode");
                 VmplPercpu::free(percpu_ptr);
             })?;
 
             set_percpu(percpu);
-
-            self.vmpl_init_test();
-            self.vmpl_init_banner();
-            self.vmpl_init_stats();
         }).map_err(|e| {
             log::error!("dune: failed to create percpu");
             e
         })?;
 
-
         Ok(())
     }
 
-    fn on_dune_exit(&mut self, conf_: *mut DuneConfig) -> ! {
+    fn banner(&self) {
+        log::info!("**********************************************");
+        log::info!("*                                            *");
+        log::info!("*              Welcome to VMPL!              *");
+        log::info!("*                                            *");
+        log::info!("**********************************************");
+    }
+
+    fn stats(&self) {
+        log::info!("VMPL Stats:");
+        // self.vmpl_mm_stats();
+    }
+
+    fn tests(&self) {
+        log::info!("vmpl_test");
+        #[cfg(test)]
+        self.pgtable_test();
+    }
+
+    fn cleanup(&self) {
+        log::info!("vmpl_cleanup");
+        // self.vmpl_mm_exit();
+        // self.apic_cleanup();
+    }
+
+    fn on_syscall(&self, conf: &mut DuneConfig) {
+        unsafe {
+            let ret = libc::syscall(
+                conf.status() as libc::c_long,
+                conf.rdi(),
+                conf.rsi(),
+                conf.rdx(),
+                conf.r10(),
+                conf.r8(),
+                conf.r9(),
+            );
+            conf.set_rax(ret);
+        }
+    }
+    
+    fn on_exit(&mut self, conf_: *mut DuneConfig) -> ! {
         let conf = unsafe { &mut *conf_ };
         let ret: DuneRetCode = conf.ret().into();
         match ret {
@@ -518,7 +461,8 @@ impl DuneRoutine for VmplSystem {
                 unsafe { libc::syscall(libc::SYS_exit, conf.status()) };
             }
             DuneRetCode::Syscall => {
-                self.on_dune_syscall(conf);
+                self.on_syscall(conf);
+                unsafe { __dune_go_dune(self.fd(), conf as *mut DuneConfig) };
             }
             DuneRetCode::Interrupt => {
                 #[cfg(feature = "debug")]
@@ -526,6 +470,7 @@ impl DuneRoutine for VmplSystem {
                 println!("dune: exit due to interrupt {}", conf.status());
             }
             DuneRetCode::Signal => {
+                // percpu signal handler
                 unsafe { __dune_go_dune(self.fd(), conf_) };
             }
             DuneRetCode::NoEnter => {

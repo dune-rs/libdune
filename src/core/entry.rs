@@ -80,13 +80,13 @@ global_asm!(
 );
 
 pub trait DuneRoutine : Any + Send + Sync {
-    fn dune_init(&mut self, map_full: bool) -> Result<()>;
-    fn dune_enter(&mut self) -> Result<()>;
-    fn on_dune_exit(&mut self, conf: *mut DuneConfig) -> !;
-}
-
-pub struct System<S: DuneRoutine> {
-    inner: Arc<S>,
+    fn init(&mut self, map_full: bool) -> Result<()>;
+    fn enter(&mut self) -> Result<()>;
+    fn banner(&self);
+    fn stats(&self);
+    fn tests(&self);
+    fn cleanup(&self);
+    fn on_exit(&mut self, conf: *mut DuneConfig) -> !;
 }
 
 lazy_static! {
@@ -153,7 +153,7 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
 
     let device = get_system::<dyn DuneRoutine>();
     device.and_then(|device| {
-        match device.dune_init(map_full) {
+        match device.init(map_full) {
             Ok(_) => 0,
             Err(e) => {
                 log::error!("dune_init() {}", e);
@@ -177,8 +177,14 @@ pub extern "C" fn dune_init(map_full: bool) -> c_int {
 pub extern "C" fn dune_enter() -> c_int {
     let mut device = get_system::<dyn DuneRoutine>();
     device.and_then(|device| {
-        match device.dune_enter() {
-            Ok(_) => 0,
+        match device.enter() {
+            Ok(_) => {
+                log::info!("dune_enter() success");
+                device.banner();
+                device.stats();
+                device.tests();
+                0
+            }
             Err(e) => {
                 log::error!("dune_enter() {}", e);
                 libc::EXIT_FAILURE
@@ -200,7 +206,7 @@ pub extern "C" fn dune_enter() -> c_int {
 pub extern "C" fn dune_init_and_enter() -> c_int {
     let device = get_system::<dyn DuneRoutine>();
     device.and_then(|device| {
-        match device.dune_init(true) {
+        match device.init(true) {
             Ok(_) => dune_enter(),
             Err(e) => {
                 log::error!("dune_init_and_enter() {}", e);
@@ -220,6 +226,6 @@ pub extern "C" fn dune_init_and_enter() -> c_int {
 pub unsafe extern "C" fn on_dune_exit(conf: *mut DuneConfig) -> ! {
     let device = get_system::<dyn DuneRoutine>();
     device.and_then(|device| {
-        device.on_dune_exit(conf)
+        device.on_exit(conf)
     });
 }
