@@ -14,7 +14,6 @@ pub mod mm;
 #[cfg(feature = "vc")]
 #[macro_use]
 pub mod vc;
-pub mod fpu;
 #[cfg(feature = "syscall")]
 pub mod syscall;
 #[macro_use]

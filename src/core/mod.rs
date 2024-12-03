@@ -17,6 +17,7 @@ mod mapping;
 mod signals;
 mod cpuset;
 mod idt;
+pub mod fpu;
 pub mod user;
 
 #[cfg(feature = "debug")]
@@ -35,3 +36,4 @@ pub use crate::core::mapping::*;
 #[cfg(feature = "signal")]
 pub use crate::core::signals::*;
 pub use crate::core::idt::*;
+pub use crate::core::fpu::*;
