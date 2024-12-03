@@ -620,6 +620,11 @@ impl WithPageTable for VmplSystem {
     }
 
     fn do_mapping(&self, phys: PhysAddr, len: usize) -> Result<*mut PageTable> {
+        if self.page_manager().lock().unwrap().is_vmpl_page(phys) {
+            log::error!("dune: page already mapped");
+            return Err(Error::AlreadyMapped);
+        }
+
         let addr = unsafe {
             mmap(
                 (PGTABLE_MMAP_BASE + phys.as_u64()) as *mut _,
@@ -632,10 +637,11 @@ impl WithPageTable for VmplSystem {
         };
 
         if addr == MAP_FAILED {
+            log::error!("dune: failed to map page");
             return Err(Error::MappingFailed);
         }
 
-        mark_vmpl_pages(phys, len);
+        self.page_manager().lock().unwrap().mark_vmpl_pages(phys, len);
 
         Ok(addr as *mut PageTable)
     }

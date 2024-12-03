@@ -85,6 +85,10 @@ pub trait DuneRoutine : Any + Send + Sync {
     fn on_dune_exit(&mut self, conf: *mut DuneConfig) -> !;
 }
 
+pub struct System<S: DuneRoutine> {
+    inner: Arc<S>,
+}
+
 lazy_static! {
     pub static ref DEVICE: Mutex<Option<Box<dyn DuneRoutine>>> = Mutex::new(None);
 }

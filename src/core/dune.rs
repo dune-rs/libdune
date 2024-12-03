@@ -354,7 +354,17 @@ impl WithAddressTranslation for DuneSystem {
         self.layout.pa_to_va(pa)
     }
 }
+impl WithPageTable for DuneSystem {
 
+    fn get_root(&self) -> &PageTable {
+        self.system.get_root()
+    }
+
+    fn get_root_mut(&mut self) -> &mut PageTable {
+        self.system.get_root_mut()
+    }
+}
+impl WithDuneMemory for DuneSystem { }
 impl DuneMapping for DuneSystem {
 
     fn get_layout(&self) -> Result<DuneLayout> {

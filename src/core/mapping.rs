@@ -7,13 +7,13 @@ use crate::mm::MmapArgs;
 use crate::utils::rd_rsp;
 use x86_64::PhysAddr;
 use crate::mm::AddressMapping;
-use crate::WithAddressTranslation;
+use crate::WithDuneMemory;
 use crate::DUNE_VM;
 use dune_sys::result::Result;
 
 const VSYSCALL_ADDR: VirtAddr = VirtAddr::new(0xffffffffff600000);
 
-pub trait DuneMapping : WithAddressTranslation where Self: Sized {
+pub trait DuneMapping : WithDuneMemory where Self: Sized {
 
     #[cfg(all(feature = "dune", feature = "syscall"))]
     fn setup_vsyscall(&mut self) -> Result<()> {
