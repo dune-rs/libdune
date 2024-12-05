@@ -599,7 +599,8 @@ pub unsafe fn default_pgflt_handler(root: &mut PageTable, addr: VirtAddr, fec: u
             let new_page = unsafe { &mut *(virt_addr.as_u64() as *mut PageTable) };
             // clear new page
             unsafe {
-                ptr::write_bytes(new_page, 0, PGSIZE as usize);
+                let old_page = pgtable_pa_to_va(pte.addr())?;
+                ptr::copy_nonoverlapping(old_page.as_u64() as *const u8, new_page as *mut u8, PGSIZE as usize);
             }
 
             // Copy the old page to the new page

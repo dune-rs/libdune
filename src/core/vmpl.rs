@@ -95,7 +95,7 @@ impl VmplPercpu {
         }
     }
 
-    fn setup_vcpu(&mut self) -> Result<()> {
+    fn create_vcpu(&mut self) -> Result<()> {
         let mut data = Box::new(VcpuConfig::default());
         log::info!("setup vcpu");
 
@@ -181,7 +181,7 @@ impl Percpu for VmplPercpu {
         self.setup_gdt(&mut self.gdt, &mut self.tss)?;
 
         // Setup VCPU
-        self.setup_vcpu()?;
+        self.create_vcpu()?;
 
         // Setup XSAVE for FPU
         self.xsave_begin();
@@ -359,16 +359,29 @@ impl DuneRoutine for VmplSystem {
         // Setup VMPL without error checking
         #[cfg(feature = "signal")]
         self.setup_signals()?;
+
+        // Setup hotcalls
         #[cfg(feature = "hotcalls")]
         self.setup_hotcalls();
+
+        // Setup IDT
         self.setup_idt();
 
+        // Setup address translation    
         self.setup_address_translation()?;
+
+        // Create VM
         self.create_vm()?;
+
+        // Setup memory management
         #[cfg(feature = "mm")]
         self.setup_mm()?;
+
+        // Setup seimi
         #[cfg(feature = "seimi")]
         self.setup_seimi()?;
+
+        // Setup syscall
         #[cfg(feature = "syscall")]
         self.setup_syscall()?;
 
@@ -434,8 +447,6 @@ impl DuneRoutine for VmplSystem {
 
     fn cleanup(&self) {
         log::info!("vmpl_cleanup");
-        // self.vmpl_mm_exit();
-        // self.apic_cleanup();
     }
 
     fn on_syscall(&self, conf: &mut DuneConfig) {

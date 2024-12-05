@@ -374,7 +374,7 @@ impl DunePageManager for PageManager {
 
 impl PageManager {
 
-    pub fn page_init(&mut self) -> Result<()> {
+    pub fn init(&mut self) -> Result<()> {
         // 申请MAX_PAGES个Page结构体
         let layout = Layout::array::<Page>(MAX_PAGES).unwrap();
         let pages_ptr = unsafe { alloc_zeroed(layout) as *mut Page };
@@ -390,12 +390,12 @@ impl PageManager {
         Ok(())
     }
 
-    pub fn page_exit(&mut self) {
+    pub fn exit(&mut self) {
         // Vec会自动处理内存释放，因此不需要手动调用dealloc
         self.pages.clear();
     }
 
-    pub fn page_stats(&self) {
+    pub fn stats(&self) {
         println!("Page Stats:");
         self.vmpl_page_stats();
         self.dune_page_stats();
@@ -486,14 +486,19 @@ pub trait WithPageManager {
     fn page_manager(&self) -> Arc<Mutex<PageManager>>;
 
     // 初始化页管理器
-    fn page_init(&self, fd: i32, pagebase: PhysAddr) -> Result<()> {
+    fn init(&self, fd: i32, pagebase: PhysAddr) -> Result<()> {
         let pm = self.page_manager().lock().unwrap();
-        pm.page_init(fd, pagebase)
+        pm.init(fd, pagebase)
     }
 
-    fn page_exit(&self) {
+    fn exit(&self) {
         let pm = self.page_manager().lock().unwrap();
-        pm.page_exit()
+        pm.exit()
+    }
+
+    fn stats(&self) {
+        let pm = self.page_manager().lock().unwrap();
+        pm.stats()
     }
 
     // 向Guest OS申请num_pages个物理页

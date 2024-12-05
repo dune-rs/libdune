@@ -1,4 +1,5 @@
 use pretty_hex::*;
+use x86_64::structures::idt::{Idt, IdtEntry};
 use dune_sys::{WithInterrupt, IdtDescriptor};
 
 use crate::globals::*;
@@ -6,6 +7,12 @@ use crate::globals::*;
 use super::__dune_intr;
 
 const ISR_LEN: usize = 16;
+
+pub fn setup_idt() {
+    let mut idt = Idt::new();
+    idt.set_entries(GD_KT as u16, &GDT_TEMPLATE);
+    idt.load();
+}
 
 pub fn __setup_idt(idt: &mut [IdtDescriptor]) {
     let mut isr = __dune_intr as usize;
